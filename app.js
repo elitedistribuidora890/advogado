@@ -1876,6 +1876,49 @@ window.saveSettings = function() {
 
 // ─── CHAT WIDGET ──────────────────────────────────────────────────
 
+// ─── MOBILE SIDEBAR ───────────────────────────────────────────────
+
+window.openSidebar = function() {
+  const sidebar = document.getElementById('sidebar')
+  const overlay = document.getElementById('sidebar-overlay')
+  if (sidebar) sidebar.classList.add('open')
+  if (overlay) overlay.classList.add('active')
+  document.body.style.overflow = 'hidden'
+}
+
+window.closeSidebar = function() {
+  const sidebar = document.getElementById('sidebar')
+  const overlay = document.getElementById('sidebar-overlay')
+  if (sidebar) sidebar.classList.remove('open')
+  if (overlay) overlay.classList.remove('active')
+  document.body.style.overflow = ''
+}
+
+// Close sidebar on Escape key
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') window.closeSidebar()
+})
+
+// Swipe-to-open sidebar (touch gesture — drag right from left edge)
+;(function setupSwipe() {
+  let startX = 0, startY = 0, tracking = false
+  document.addEventListener('touchstart', e => {
+    const t = e.touches[0]
+    startX = t.clientX; startY = t.clientY
+    tracking = startX < 30 // only trigger from left edge (0-30px)
+  }, { passive: true })
+
+  document.addEventListener('touchmove', e => {
+    if (!tracking) return
+    const dx = e.touches[0].clientX - startX
+    const dy = Math.abs(e.touches[0].clientY - startY)
+    if (dx > 50 && dy < 60) {
+      tracking = false
+      window.openSidebar()
+    }
+  }, { passive: true })
+})()
+
 window.toggleChat = function() {
   const box = el('chat-box')
   box.style.display = box.style.display === 'none' ? 'flex' : 'none'
@@ -1962,4 +2005,4 @@ function scrollChat() {
   document.getElementById('login-email')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') el('login-password')?.focus()
   })
-})()  
+})()

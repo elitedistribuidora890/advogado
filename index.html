@@ -34,7 +34,7 @@
         <span id="login-btn-text">Entrar</span>
         <span id="login-btn-spinner" class="spinner" style="display:none"></span>
       </button>
-      <p class="login-demo">Configure Firebase em Configurações para acessar o sistema.</p>
+      <p class="login-demo">Sem Firebase configurado? Entre com qualquer e-mail e senha para explorar o sistema.</p>
     </div>
   </div>
 
@@ -62,6 +62,99 @@
         <a href="#" class="nav-item" data-page="case-detail" onclick="navigate('case-detail',this);closeSidebar()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="1.5"/></svg>
           Visão do Caso
+          <span class="nav-sub-badge">sub</span>
+        </a>
+        <a href="#" class="nav-item" data-page="script" onclick="navigate('script',this);closeSidebar()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 20h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.5"/></svg>
+          Roteiro de Oitiva
+        </a>
+        <a href="#" class="nav-item" data-page="video" onclick="navigate('video',this);closeSidebar()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><polygon points="23 7 16 12 23 17 23 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="1" y="5" width="15" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>
+          Depoimentos
+        </a>
+        <a href="#" class="nav-item" data-page="reports" onclick="navigate('reports',this);closeSidebar()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 20V10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 20V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M6 20v-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Relatórios
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sidebar-user" id="sidebar-user">
+          <div class="avatar" id="sidebar-avatar">RM</div>
+          <div class="sidebar-user-info">
+            <div class="sidebar-user-name" id="sidebar-user-name">Dr. Rafael Monteiro</div>
+            <div class="sidebar-user-role">Enterprise</div>
+          </div>
+        </div>
+        <a href="#" class="nav-item" data-page="settings" onclick="navigate('settings',this);closeSidebar()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.5"/></svg>
+          Configurações
+        </a>
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%;justify-content:flex-start;gap:8px;" onclick="handleLogout()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="16 17 21 12 16 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="21" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Sair
+        </button>
+      </div>
+    </aside>
+
+    <div class="main-wrapper">
+      <header class="header">
+        <div style="display:flex;align-items:center;min-width:0;flex:1">
+          <!-- Hamburger menu button (mobile only) -->
+          <button class="hamburger-btn" id="hamburger-btn" onclick="openSidebar()" aria-label="Abrir menu">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><line x1="3" y1="6" x2="21" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="3" y1="12" x2="21" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="3" y1="18" x2="21" y2="18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+          <div style="min-width:0">
+            <h1 id="header-title">Dashboard</h1>
+            <p id="header-subtitle">Visão geral do escritório</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <div id="header-alert" class="header-alert" style="display:none"></div>
+          <button class="btn btn-primary btn-sm" onclick="navigate('new-case',null)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><line x1="12" y1="5" x2="12" y2="19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span class="btn-text">Novo Caso</span>
+          </button>
+        </div>
+      </header>
+
+      <main id="main-content">
+        <!-- Pages injected here -->
+      </main>
+    </div>
+  </div>
+
+  <!-- AI CHAT WIDGET -->
+  <div id="chat-widget" style="display:none">
+    <div id="chat-box" style="display:none" class="chat-box fade-up">
+      <div class="chat-header">
+        <div class="chat-header-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2a2 2 0 0 1 2 2v.5a.5.5 0 0 0 .5.5H16a2 2 0 0 1 2 2v1a2 2 0 0 1-2 2h-1.5a.5.5 0 0 0-.5.5V12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="15" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M12 18v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M9 15H5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M19 15h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </div>
+        <div>
+          <div class="chat-header-name">Lexis AI</div>
+          <div class="chat-header-sub" id="chat-subtitle">Assistente jurídica</div>
+        </div>
+        <button onclick="toggleChat()" class="chat-close">×</button>
+      </div>
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-msg assistant"><div class="chat-bubble">Olá! Sou a Lexis, sua assistente jurídica. Como posso ajudar com seus casos hoje?</div></div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Pergunte sobre seus casos…" onkeydown="if(event.key==='Enter')sendChat()" autocomplete="off" />
+        <button class="chat-send-btn" id="chat-send-btn" onclick="sendChat()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><line x1="22" y1="2" x2="11" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><polygon points="22 2 15 22 11 13 2 9 22 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <button class="chat-fab" id="chat-fab" onclick="toggleChat()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 2a2 2 0 0 1 2 2v.5a.5.5 0 0 0 .5.5H16a2 2 0 0 1 2 2v1a2 2 0 0 1-2 2h-1.5a.5.5 0 0 0-.5.5V12" stroke="white" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="15" r="3" stroke="white" stroke-width="1.5"/><path d="M12 18v4" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M9 15H5" stroke="white" stroke-width="1.5" stroke-linecap="round"/><path d="M19 15h-4" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <!-- Firebase SDK -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>          Visão do Caso
           <span class="nav-sub-badge">sub</span>
         </a>
         <a href="#" class="nav-item" data-page="script" onclick="navigate('script',this);closeSidebar()">

@@ -1240,116 +1240,382 @@ window.exportCaseTxt = function() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' })); a.download = `${c.title.replace(/\s+/g,'_')}_resumo.txt`; a.click()
 }
 
-// ─── SCRIPT PAGE ──────────────────────────────────────────────────
+// ─── SCRIPT PAGE — INSTRUÇÃO CONCENTRADA ─────────────────────────
+// Fluxo: 1) Linha do Tempo de vínculos → 2) Configurar Roteiro → 3) Modo Oitiva
+
+// Estado da linha do tempo e do roteiro
+if (!state.timeline) state.timeline = [] // [{id, empresa, cargo, inicio, fim, regime, obs}]
+if (!state.scriptTab) state.scriptTab = 'timeline' // 'timeline' | 'form' | 'hearing'
+if (!state.activeQuestionIdx) state.activeQuestionIdx = 0
 
 function renderScript() {
   const c = state.selectedCase
-  const noCaseWarn = !c ? `<div class="alert-warn">⚠ Nenhum caso selecionado. Selecione um caso na página de Casos para gerar roteiros.</div>` : ''
+  const tab = state.scriptTab || 'timeline'
+  const hasScript = !!state.scriptData
+  const hasTimeline = state.timeline.length > 0
+
   set('main-content', `
-    ${noCaseWarn}
+    ${!c ? `<div class="alert-warn" style="margin-bottom:16px">⚠ Nenhum caso selecionado. Selecione um caso para gerar roteiros estratégicos.</div>` : ''}
+
+    <div class="ic-tabs-bar">
+      <button class="ic-tab ${tab==='timeline'?'active':''}" onclick="switchScriptTab('timeline')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/><line x1="3" y1="12" x2="9" y2="12" stroke="currentColor" stroke-width="1.5"/><line x1="15" y1="12" x2="21" y2="12" stroke="currentColor" stroke-width="1.5"/></svg>
+        Linha do Tempo
+        ${hasTimeline ? `<span class="ic-tab-badge">${state.timeline.length}</span>` : ''}
+      </button>
+      <button class="ic-tab ${tab==='form'?'active':''}" onclick="switchScriptTab('form')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 20h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="1.5"/></svg>
+        Configurar Roteiro
+      </button>
+      <button class="ic-tab ${tab==='hearing'?'active':''}" onclick="switchScriptTab('hearing')" ${!hasScript?'disabled title="Gere o roteiro primeiro"':''}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke="currentColor" stroke-width="1.5"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Modo Oitiva
+        ${hasScript ? '<span class="ic-tab-badge ic-tab-badge-green">●</span>' : ''}
+      </button>
+    </div>
+
+    <div id="script-tab-content" class="fade-in">
+      ${tab==='timeline' ? renderTimelineTab() : tab==='form' ? renderScriptFormTab() : renderHearingTab()}
+    </div>
+  `)
+  initTimelineListeners()
+}
+
+window.switchScriptTab = function(tab) {
+  state.scriptTab = tab
+  renderScript()
+}
+
+// ── TAB 1: LINHA DO TEMPO ─────────────────────────────────────────
+
+function renderTimelineTab() {
+  const periods = state.timeline
+  return `
+    <div style="max-width:820px">
+      <div style="margin-bottom:20px">
+        <div style="font-size:15px;font-weight:600;margin-bottom:4px">Linha do Tempo de Vínculos</div>
+        <div style="font-size:13px;color:var(--text-muted)">Cadastre os períodos de trabalho do reclamante. O roteiro de oitiva será gerado levando em conta esses vínculos.</div>
+      </div>
+
+      <!-- Formulário de novo vínculo -->
+      <div class="card" style="padding:20px;margin-bottom:20px;border:1px solid var(--accent-blue-border)">
+        <div style="font-size:13px;font-weight:600;margin-bottom:14px;color:var(--accent-blue)">+ Adicionar Vínculo</div>
+        <div class="grid-2" style="gap:12px;margin-bottom:12px">
+          <div class="field"><label>Empresa / Empregador *</label><input type="text" id="tl-empresa" placeholder="Ex.: Empresa XYZ Ltda." /></div>
+          <div class="field"><label>Cargo / Função *</label><input type="text" id="tl-cargo" placeholder="Ex.: Motorista" /></div>
+        </div>
+        <div class="grid-2" style="gap:12px;margin-bottom:12px">
+          <div class="field"><label>Início *</label><input type="month" id="tl-inicio" style="background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-md);border-radius:var(--radius-sm);padding:8px 12px;font-family:inherit;width:100%" /></div>
+          <div class="field"><label>Fim (vazio = atual)</label><input type="month" id="tl-fim" style="background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border-md);border-radius:var(--radius-sm);padding:8px 12px;font-family:inherit;width:100%" /></div>
+        </div>
+        <div class="grid-2" style="gap:12px;margin-bottom:14px">
+          <div class="field"><label>Regime de Trabalho</label>
+            <select id="tl-regime">
+              <option value="clt">CLT</option>
+              <option value="pj">PJ / Autônomo</option>
+              <option value="intermitente">Intermitente</option>
+              <option value="temporario">Temporário</option>
+              <option value="cooperado">Cooperado</option>
+              <option value="outro">Outro</option>
+            </select>
+          </div>
+          <div class="field"><label>Observação (opcional)</label><input type="text" id="tl-obs" placeholder="Ex.: CTPS anotada, reconhecimento forçado…" /></div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="addTimelinePeriod()">Adicionar à Linha do Tempo</button>
+      </div>
+
+      <!-- Visualização da linha do tempo -->
+      ${periods.length === 0 ? `
+        <div class="empty-state card" style="padding:40px">
+          <div class="empty-icon">📅</div>
+          <div class="empty-title">Nenhum vínculo cadastrado ainda</div>
+          <div class="empty-desc">Adicione os períodos de trabalho do reclamante acima.</div>
+        </div>
+      ` : `
+        <div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">
+          <span class="section-muted">${periods.length} vínculo${periods.length>1?'s':''} cadastrado${periods.length>1?'s':''}</span>
+          <button class="btn btn-ghost btn-sm" onclick="clearTimeline()">Limpar tudo</button>
+        </div>
+        <div class="tl-visual">
+          ${periods.map((p,i) => renderTimelineCard(p,i)).join('')}
+        </div>
+      `}
+
+      <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-primary" onclick="switchScriptTab('form')">
+          Configurar Roteiro →
+        </button>
+        ${periods.length > 0 ? `<span style="font-size:12px;color:var(--text-muted);align-self:center">✓ ${periods.length} vínculo${periods.length>1?'s':''} vão influenciar o roteiro</span>` : ''}
+      </div>
+    </div>`
+}
+
+function renderTimelineCard(p, i) {
+  const regimeColor = { clt:'var(--accent-blue)', pj:'var(--accent-gold)', intermitente:'var(--accent-teal)', temporario:'var(--risk-med)', cooperado:'var(--risk-low)', outro:'var(--text-muted)' }
+  const color = regimeColor[p.regime] || 'var(--text-muted)'
+  const duracao = calcDuracao(p.inicio, p.fim)
+  return `
+    <div class="tl-card fade-up" style="animation-delay:${i*0.05}s;border-left-color:${color}">
+      <div class="tl-card-line" style="background:${color}"></div>
+      <div class="tl-card-dot" style="background:${color}"></div>
+      <div class="tl-card-body">
+        <div class="tl-card-header">
+          <div>
+            <div style="font-size:14px;font-weight:600">${p.empresa}</div>
+            <div style="font-size:12px;color:var(--text-secondary)">${p.cargo}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <span class="badge" style="background:${color}18;color:${color};border:1px solid ${color}44">${p.regime.toUpperCase()}</span>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${duracao}</div>
+          </div>
+        </div>
+        <div class="tl-card-dates">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="1.5"/><line x1="16" y1="2" x2="16" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="2" x2="8" y2="6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          ${fmtMonth(p.inicio)} → ${p.fim ? fmtMonth(p.fim) : '<span style="color:var(--risk-low)">Atual</span>'}
+          ${p.obs ? `<span style="margin-left:10px;color:var(--text-muted)">· ${p.obs}</span>` : ''}
+        </div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px;color:var(--risk-high)" onclick="removeTimelinePeriod(${i})">Remover</button>
+      </div>
+    </div>`
+}
+
+function fmtMonth(ym) {
+  if (!ym) return '—'
+  const [y, m] = ym.split('-')
+  const months = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
+  return `${months[parseInt(m)-1]}/${y}`
+}
+
+function calcDuracao(inicio, fim) {
+  if (!inicio) return ''
+  const start = new Date(inicio + '-01')
+  const end = fim ? new Date(fim + '-01') : new Date()
+  const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth())
+  if (months < 12) return `${months} mes${months>1?'es':''}`
+  const years = Math.floor(months / 12), rem = months % 12
+  return `${years} ano${years>1?'s':''}${rem > 0 ? ` e ${rem} mes${rem>1?'es':''}` : ''}`
+}
+
+window.addTimelinePeriod = function() {
+  const empresa = el('tl-empresa')?.value.trim()
+  const cargo = el('tl-cargo')?.value.trim()
+  const inicio = el('tl-inicio')?.value
+  if (!empresa || !cargo || !inicio) { alert('Preencha empresa, cargo e data de início.'); return }
+  const period = {
+    id: 'tl-' + Date.now(),
+    empresa, cargo, inicio,
+    fim: el('tl-fim')?.value || null,
+    regime: el('tl-regime')?.value || 'clt',
+    obs: el('tl-obs')?.value.trim() || '',
+  }
+  state.timeline.push(period)
+  state.timeline.sort((a,b) => a.inicio.localeCompare(b.inicio))
+  renderScript()
+}
+
+window.removeTimelinePeriod = function(idx) {
+  state.timeline.splice(idx, 1)
+  renderScript()
+}
+
+window.clearTimeline = function() {
+  if (!confirm('Remover todos os vínculos?')) return
+  state.timeline = []
+  renderScript()
+}
+
+function initTimelineListeners() {
+  // nothing needed — onclick inline
+}
+
+// ── TAB 2: CONFIGURAR ROTEIRO ─────────────────────────────────────
+
+function renderScriptFormTab() {
+  const c = state.selectedCase
+  const hasTimeline = state.timeline.length > 0
+  const tlSummary = hasTimeline
+    ? state.timeline.map(p => `${p.empresa} (${p.cargo}, ${fmtMonth(p.inicio)}–${p.fim?fmtMonth(p.fim):'atual'}, ${p.regime.toUpperCase()}${p.obs?' — '+p.obs:''})`).join('; ')
+    : ''
+
+  return `
     <div class="grid-auto" style="align-items:start">
       <div>
+        ${hasTimeline ? `
+          <div class="alert-info" style="margin-bottom:16px;display:flex;align-items:flex-start;gap:10px">
+            <span style="font-size:16px;flex-shrink:0">📅</span>
+            <div>
+              <div style="font-weight:600;margin-bottom:4px">Linha do tempo ativa</div>
+              <div style="font-size:12px;color:var(--text-secondary);line-height:1.5">${state.timeline.length} vínculo${state.timeline.length>1?'s':''} influenciarão o roteiro automaticamente.</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="switchScriptTab('timeline')" style="margin-left:auto;flex-shrink:0">Editar</button>
+          </div>` : `
+          <div class="alert-warn" style="margin-bottom:16px">
+            ⚠ Nenhum vínculo cadastrado. <button class="btn btn-ghost btn-sm" onclick="switchScriptTab('timeline')" style="padding:2px 8px">Adicionar →</button>
+          </div>`}
+
         <div class="card" style="padding:22px;margin-bottom:20px">
-          <div style="font-size:14px;font-weight:600;margin-bottom:18px">Configurar Roteiro</div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:18px">Configurar Roteiro Estratégico</div>
           <div style="display:flex;flex-direction:column;gap:14px">
             <div class="field">
-              <label>Nome da Testemunha *</label>
-              <input type="text" id="script-witness" placeholder="Ex.: Ana Lima" />
+              <label>Nome da Testemunha / Reclamante *</label>
+              <input type="text" id="script-witness" placeholder="Ex.: João da Silva" />
+            </div>
+            <div class="grid-2" style="gap:12px">
+              <div class="field">
+                <label>Papel na Ação</label>
+                <select id="script-role">
+                  <option value="reclamante">Reclamante</option>
+                  <option value="preposto">Preposto da empresa</option>
+                  <option value="testemunha-autora">Testemunha da Autora</option>
+                  <option value="testemunha-ré">Testemunha da Ré</option>
+                  <option value="perito">Perito</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Tipo de Ação</label>
+                <select id="script-action-type">
+                  <option value="reclamatoria">Reclamatória Trabalhista</option>
+                  <option value="acidente">Acidente de Trabalho</option>
+                  <option value="assedio">Assédio / Danos Morais</option>
+                  <option value="horas-extras">Horas Extras</option>
+                  <option value="rescisao">Rescisão Indireta</option>
+                  <option value="reconhecimento">Reconhecimento de Vínculo</option>
+                  <option value="outro">Outro</option>
+                </select>
+              </div>
             </div>
             <div class="field">
-              <label>Papel da Testemunha</label>
-              <select id="script-role">
-                <option value="defense">Defesa</option>
-                <option value="prosecution">Acusação</option>
-                <option value="neutral">Neutra</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>Foco do Interrogatório</label>
-              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px">
-                ${[['contradictions','Contradições'],['facts','Fatos e Cronologia'],['credibility','Credibilidade'],['documents','Documentos']].map(([val,lbl]) => `
-                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0">
-                    <input type="checkbox" id="focus-${val}" ${val==='contradictions'?'checked':''} />
-                    <span style="font-size:12px">${lbl}</span>
+              <label>Temas prioritários</label>
+              <div class="ic-checkgroup">
+                ${[
+                  ['vinculo','Comprovação / negação do vínculo'],
+                  ['jornada','Jornada e horas extras'],
+                  ['condicoes','Condições e ambiente de trabalho'],
+                  ['verbas','Verbas rescisórias'],
+                  ['subordinacao','Subordinação e dependência econômica'],
+                  ['contradictions','Contradições e inconsistências'],
+                  ['documentos','Documentos e provas materiais'],
+                  ['testemunho','Credibilidade do testemunho'],
+                ].map(([val,lbl]) => `
+                  <label class="ic-check-item">
+                    <input type="checkbox" id="focus-${val}" ${['vinculo','jornada','contradictions'].includes(val)?'checked':''} />
+                    <span>${lbl}</span>
                   </label>`).join('')}
               </div>
             </div>
             <div class="field">
-              <label>Contexto Adicional (opcional)</label>
-              <textarea id="script-context" placeholder="Descreva fatos relevantes do caso para melhorar a qualidade do roteiro…" style="min-height:70px"></textarea>
+              <label>Contexto adicional do caso (opcional)</label>
+              <textarea id="script-context" placeholder="Inclua fatos específicos, documentos relevantes, divergências já conhecidas…" style="min-height:80px"></textarea>
             </div>
-            <button class="btn btn-primary" id="script-gen-btn" onclick="handleGenerateScript()">
-              Gerar Roteiro com IA
+            <button class="btn btn-primary btn-lg" id="script-gen-btn" onclick="handleGenerateScript()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2a2 2 0 0 1 2 2v.5a.5.5 0 0 0 .5.5H16a2 2 0 0 1 2 2v1a2 2 0 0 1-2 2h-1.5a.5.5 0 0 0-.5.5V12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="15" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+              Gerar Roteiro Estratégico com IA
             </button>
           </div>
         </div>
         <div id="script-output"></div>
       </div>
-      <div>
-        <div class="card" style="padding:20px">
-          <div class="section-muted" style="margin-bottom:14px">Dicas de Oitiva</div>
-          <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--text-secondary)">
-            ${['Perguntas objetivas e abertas revelam mais informações.','Deixe silêncios estratégicos após respostas importantes.','Confirme datas e locais com precisão documental.','Reserve contradições para o momento oportuno.','Mantenha o tom profissional mesmo sob pressão.'].map(t => `<div style="display:flex;gap:8px"><span style="color:var(--accent-teal)">→</span>${t}</div>`).join('')}
+
+      <!-- Coluna lateral: dicas + resumo da linha do tempo -->
+      <div style="display:flex;flex-direction:column;gap:14px">
+        ${hasTimeline ? `
+          <div class="card" style="padding:18px">
+            <div class="section-muted" style="margin-bottom:12px">Vínculos Cadastrados</div>
+            ${state.timeline.map(p => `
+              <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center">
+                <div style="width:8px;height:8px;border-radius:50%;background:var(--accent-blue);flex-shrink:0;margin-top:3px"></div>
+                <div>
+                  <div style="font-size:12px;font-weight:500">${p.empresa}</div>
+                  <div style="font-size:11px;color:var(--text-muted)">${p.cargo} · ${fmtMonth(p.inicio)}–${p.fim?fmtMonth(p.fim):'atual'}</div>
+                </div>
+              </div>`).join('')}
+          </div>` : ''}
+
+        <div class="card" style="padding:18px">
+          <div class="section-muted" style="margin-bottom:12px">Dicas Estratégicas</div>
+          <div style="display:flex;flex-direction:column;gap:9px;font-size:12px;color:var(--text-secondary)">
+            ${[
+              'Use datas precisas dos vínculos para pressionar inconsistências.',
+              'Explore regime de trabalho: PJ ou cooperado podem mascarar vínculo CLT.',
+              'Confirme se houve CTPS anotada, holerites ou recibos.',
+              'Perguntas sobre rotina diária revelam subordinação.',
+              'Reserve contradições para o final — não antecipe.',
+              'Silêncio estratégico após respostas importantes produz mais.',
+            ].map(t => `<div style="display:flex;gap:8px"><span style="color:var(--accent-teal);flex-shrink:0">→</span>${t}</div>`).join('')}
           </div>
         </div>
       </div>
-    </div>
-  `)
+    </div>`
 }
 
 window.handleGenerateScript = async function() {
   const witness = el('script-witness')?.value?.trim()
-  if (!witness) { alert('Informe o nome da testemunha.'); return }
-  const focus = ['contradictions','facts','credibility','documents'].filter(f => el('focus-'+f)?.checked)
-  const role = el('script-role')?.value || 'defense'
+  if (!witness) { alert('Informe o nome da testemunha/reclamante.'); return }
+  const focus = ['vinculo','jornada','condicoes','verbas','subordinacao','contradictions','documentos','testemunho'].filter(f => el('focus-'+f)?.checked)
+  const role = el('script-role')?.value || 'reclamante'
+  const actionType = el('script-action-type')?.value || 'reclamatoria'
   const context = el('script-context')?.value || ''
   const c = state.selectedCase
 
+  const timelineCtx = state.timeline.length > 0
+    ? `\n\nLINHA DO TEMPO DE VÍNCULOS:\n${state.timeline.map(p => `- ${p.empresa} | ${p.cargo} | ${fmtMonth(p.inicio)}–${p.fim?fmtMonth(p.fim):'atual'} | ${p.regime.toUpperCase()}${p.obs?' | Obs: '+p.obs:''}`).join('\n')}`
+    : ''
+
   const btn = el('script-gen-btn')
-  btn.disabled = true; btn.innerHTML = `${spinner()} Gerando roteiro…`
-  set('script-output', `<div style="text-align:center;padding:40px">${spinner('spinner-lg')}<div style="font-size:13px;color:var(--text-muted);margin-top:16px">A IA está criando o roteiro…</div></div>`)
+  btn.disabled = true; btn.innerHTML = `${spinner()} Gerando roteiro estratégico…`
+  set('script-output', `<div style="text-align:center;padding:48px">${spinner('spinner-lg')}<div style="font-size:13px;color:var(--text-muted);margin-top:16px">IA analisando vínculos e montando roteiro…</div></div>`)
 
   try {
-    const script = await generateScript({ witness, witnessRole: role, focus, caseContext: c ? `${c.title} — ${c.clientName}. ${context}` : context })
+    const caseCtx = c ? `Caso: ${c.title}. Cliente: ${c.clientName || ''}. Tribunal: ${c.court || ''}. ` : ''
+    const script = await generateScript({
+      witness, witnessRole: role, focus, actionType,
+      caseContext: caseCtx + context + timelineCtx,
+      timeline: state.timeline,
+    })
     state.scriptData = script
-    // Salva roteiro no Firebase se houver caso selecionado
+    state.activeQuestionIdx = 0
     if (c && state.fbDb) {
-      try {
-        await addDoc(collection(state.fbDb, 'cases', c.id, 'scripts'), { ...script, createdAt: serverTimestamp() })
-      } catch {}
+      try { await addDoc(collection(state.fbDb, 'cases', c.id, 'scripts'), { ...script, createdAt: serverTimestamp() }) } catch {}
     }
     renderScriptResult(script)
   } catch (e) {
     set('script-output', `<div class="alert-error">${e.message}</div>`)
   }
-  btn.disabled = false; btn.textContent = 'Gerar Roteiro com IA'
+  btn.disabled = false; btn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 2a2 2 0 0 1 2 2v.5a.5.5 0 0 0 .5.5H16a2 2 0 0 1 2 2v1a2 2 0 0 1-2 2h-1.5a.5.5 0 0 0-.5.5V12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="12" cy="15" r="3" stroke="currentColor" stroke-width="1.5"/></svg>Gerar Roteiro Estratégico com IA`
 }
 
 function renderScriptResult(script) {
   const c = state.selectedCase
-  const prioColor = { critical: 'var(--risk-high)', high: 'var(--risk-med)', normal: 'var(--text-muted)' }
-  const prioLabel = { critical: 'Crítico', high: 'Alta prioridade', normal: 'Normal' }
+  const prioColor = { critical:'var(--risk-high)', high:'var(--risk-med)', normal:'var(--text-muted)' }
+  const prioLabel = { critical:'Crítico', high:'Alta prioridade', normal:'Normal' }
   set('script-output', `
     <div class="fade-up">
-      <div class="card" style="padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between">
+      <div class="card" style="padding:16px 20px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div>
           <div style="font-size:14px;font-weight:600">${script.witness}</div>
-          <div style="font-size:12px;color:var(--text-muted)">${script.questions.length} perguntas · ${c?.title || '—'}</div>
+          <div style="font-size:12px;color:var(--text-muted)">${script.questions.length} perguntas estratégicas · ${c?.title || '—'}</div>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="exportScript()">Exportar TXT</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" onclick="switchScriptTab('hearing')">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke="currentColor" stroke-width="1.5"/></svg>
+            Iniciar Oitiva
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="exportScript()">Exportar TXT</button>
+        </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;flex-direction:column;gap:8px">
         ${script.questions.map((q, i) => `
-          <div class="card question-card priority-${q.priority} fade-up" style="animation-delay:${i * 0.06}s">
+          <div class="card question-card priority-${q.priority} fade-up" style="animation-delay:${i*0.04}s">
             <div style="display:flex;align-items:flex-start;gap:12px">
               <div class="question-num">${i+1}</div>
               <div style="flex:1">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
                   <span class="badge badge-neutral">${q.category}</span>
-                  ${q.aiFlag ? '<span class="badge badge-risk-high">⚠ Contradição IA</span>' : ''}
+                  ${q.aiFlag ? '<span class="badge badge-risk-high">⚠ Contradição</span>' : ''}
                   <span style="margin-left:auto;font-size:11px;color:${prioColor[q.priority]}">${prioLabel[q.priority]}</span>
                 </div>
                 <p style="font-size:13px;line-height:1.6;margin:0">${q.text}</p>
+                ${q.rationale ? `<p style="font-size:11px;color:var(--text-muted);margin:6px 0 0;font-style:italic">${q.rationale}</p>` : ''}
               </div>
             </div>
           </div>`).join('')}
@@ -1359,8 +1625,174 @@ function renderScriptResult(script) {
 
 window.exportScript = function() {
   if (!state.scriptData) return
-  const lines = [`ROTEIRO DE OITIVA — ${state.scriptData.witness}`, `Gerado em: ${state.scriptData.createdAt}`, `Caso: ${state.selectedCase?.title || '—'}`, '', ...state.scriptData.questions.map((q, i) => `${i+1}. [${q.category}] ${q.text}${q.aiFlag ? ' ⚠ CONTRADIÇÃO' : ''}`)]
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' })); a.download = `roteiro_${state.scriptData.witness.replace(/\s+/g,'_')}.txt`; a.click()
+  const tl = state.timeline.length > 0
+    ? ['\nLINHA DO TEMPO:', ...state.timeline.map(p => `  • ${p.empresa} | ${p.cargo} | ${fmtMonth(p.inicio)}–${p.fim?fmtMonth(p.fim):'atual'} | ${p.regime.toUpperCase()}`)]
+    : []
+  const lines = [
+    `ROTEIRO DE OITIVA — INSTRUÇÃO CONCENTRADA`,
+    `Testemunha: ${state.scriptData.witness}`,
+    `Gerado em: ${state.scriptData.createdAt}`,
+    `Caso: ${state.selectedCase?.title || '—'}`,
+    ...tl, '',
+    ...state.scriptData.questions.map((q, i) => `${i+1}. [${q.category}${q.aiFlag?' ⚠':''}] ${q.text}`),
+  ]
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' }))
+  a.download = `roteiro_${state.scriptData.witness.replace(/\s+/g,'_')}.txt`
+  a.click()
+}
+
+// ── TAB 3: MODO OITIVA ────────────────────────────────────────────
+
+function renderHearingTab() {
+  const script = state.scriptData
+  if (!script) {
+    return `<div class="alert-warn">Gere o roteiro na aba "Configurar Roteiro" primeiro.</div>`
+  }
+  const q = script.questions
+  const idx = Math.max(0, Math.min(state.activeQuestionIdx || 0, q.length - 1))
+  const current = q[idx]
+  const prioColor = { critical:'var(--risk-high)', high:'var(--risk-med)', normal:'var(--accent-blue)' }
+  const pColor = prioColor[current?.priority] || 'var(--accent-blue)'
+
+  return `
+    <div class="hearing-layout">
+
+      <!-- Painel Esquerdo: Gravação -->
+      <div class="hearing-recorder">
+        <div class="card" style="padding:22px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+            <div id="rec-icon-wrap" style="width:44px;height:44px;border-radius:50%;background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;border:1px solid var(--border)">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="color:var(--text-muted)"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke="currentColor" stroke-width="1.5"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+            <div style="flex:1">
+              <div style="font-size:14px;font-weight:600" id="rec-title">Gravação da Oitiva</div>
+              <div style="font-size:12px;color:var(--text-muted)">${script.witness} · ${state.selectedCase?.title || 'Sem caso'}</div>
+            </div>
+            <div style="font-family:var(--font-mono);font-size:20px;font-weight:700;color:var(--risk-high);display:none" id="rec-timer">00:00</div>
+          </div>
+          <div id="rec-error" class="alert-error" style="display:none"></div>
+          <div style="display:flex;gap:10px" id="rec-btns">
+            <button class="btn btn-primary" onclick="startRecording()">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>
+              Gravar
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="el('audio-upload-input').click()">Upload</button>
+          </div>
+          <input type="file" id="audio-upload-input" accept="audio/*,video/*" style="display:none" onchange="handleAudioUpload(event)" />
+          <div id="ffmpeg-progress" style="display:none;margin-top:12px">
+            <div style="max-width:260px">${progressBar(0,'var(--accent-teal)',6)}</div>
+            <div id="ffmpeg-progress-label" style="font-size:12px;color:var(--text-muted);margin-top:6px">Processando…</div>
+          </div>
+        </div>
+
+        <!-- Anotações da oitiva -->
+        <div class="card" style="padding:18px">
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px">📝 Anotações</div>
+          <textarea id="hearing-notes" placeholder="Anote respostas, reações ou observações importantes durante a oitiva…" style="min-height:120px;font-size:13px;resize:vertical"></textarea>
+          <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" onclick="exportHearingNotes()">Exportar Anotações</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Painel Direito: Roteiro -->
+      <div class="hearing-script">
+        <div class="hearing-script-header">
+          <div style="font-size:13px;font-weight:600">${script.witness}</div>
+          <div style="font-size:11px;color:var(--text-muted)">${script.questions.length} perguntas</div>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" onclick="exportScript()" title="Exportar roteiro">⬇</button>
+          </div>
+        </div>
+
+        <!-- Pergunta atual em destaque -->
+        <div class="hearing-current-q" id="hearing-current-q" style="border-color:${pColor}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <span class="question-num" style="background:${pColor}22;color:${pColor}">${idx+1}</span>
+            <span class="badge badge-neutral">${current?.category || ''}</span>
+            ${current?.aiFlag ? '<span class="badge badge-risk-high">⚠ Contradição</span>' : ''}
+            <span style="margin-left:auto;font-size:11px;color:${pColor}">${idx+1} / ${q.length}</span>
+          </div>
+          <p style="font-size:15px;line-height:1.65;font-weight:500;margin:0">${current?.text || ''}</p>
+          ${current?.rationale ? `<p style="font-size:12px;color:var(--text-muted);margin-top:8px;font-style:italic">${current.rationale}</p>` : ''}
+          <div style="display:flex;gap:8px;margin-top:16px">
+            <button class="btn btn-secondary btn-sm" onclick="prevQuestion()" ${idx===0?'disabled':''}>← Anterior</button>
+            <button class="btn btn-primary btn-sm" onclick="nextQuestion()" ${idx===q.length-1?'disabled':''}>Próxima →</button>
+            <button class="btn btn-ghost btn-sm" onclick="markQuestionDone(${idx})" title="Marcar como respondida" style="${current?._done?'color:var(--risk-low)':''}">
+              ${current?._done ? '✓ Respondida' : 'Marcar ✓'}
+            </button>
+          </div>
+        </div>
+
+        <!-- Lista das outras perguntas -->
+        <div class="hearing-q-list" id="hearing-q-list">
+          ${q.map((question, i) => `
+            <div class="hearing-q-item ${i===idx?'active':''} ${question._done?'done':''}" onclick="goToQuestion(${i})" id="hq-${i}">
+              <span class="hq-num" style="${i===idx?`background:${pColor}22;color:${pColor}`:''}">${i+1}</span>
+              <span class="hq-text">${question.text}</span>
+              ${question._done ? '<span style="color:var(--risk-low);font-size:12px;flex-shrink:0">✓</span>' : ''}
+              ${question.aiFlag ? '<span style="color:var(--risk-high);font-size:11px;flex-shrink:0">⚠</span>' : ''}
+            </div>`).join('')}
+        </div>
+      </div>
+
+    </div>`
+}
+
+window.prevQuestion = function() {
+  if (!state.scriptData) return
+  state.activeQuestionIdx = Math.max(0, (state.activeQuestionIdx || 0) - 1)
+  refreshHearing()
+}
+
+window.nextQuestion = function() {
+  if (!state.scriptData) return
+  const max = state.scriptData.questions.length - 1
+  state.activeQuestionIdx = Math.min(max, (state.activeQuestionIdx || 0) + 1)
+  refreshHearing()
+}
+
+window.goToQuestion = function(i) {
+  state.activeQuestionIdx = i
+  refreshHearing()
+}
+
+window.markQuestionDone = function(i) {
+  if (!state.scriptData) return
+  const q = state.scriptData.questions[i]
+  q._done = !q._done
+  refreshHearing()
+}
+
+function refreshHearing() {
+  const content = el('script-tab-content')
+  if (!content) return
+  content.innerHTML = renderHearingTab()
+  // Scroll a pergunta ativa para o centro da lista
+  setTimeout(() => {
+    const item = el('hq-' + state.activeQuestionIdx)
+    if (item) item.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, 80)
+}
+
+window.exportHearingNotes = function() {
+  const notes = el('hearing-notes')?.value || ''
+  const c = state.selectedCase
+  const script = state.scriptData
+  const lines = [
+    `ANOTAÇÕES DE OITIVA`,
+    `Testemunha: ${script?.witness || '—'}`,
+    `Caso: ${c?.title || '—'}`,
+    `Data: ${new Date().toLocaleDateString('pt-BR')}`,
+    '', notes, '',
+    '=== ROTEIRO ===',
+    ...(script?.questions.map((q,i) => `${i+1}. ${q.text}${q._done?' [RESPONDIDA]':''}`) || []),
+  ]
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type:'text/plain'}))
+  a.download = `oitiva_${(script?.witness||'sem_nome').replace(/\s+/g,'_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.txt`
+  a.click()
 }
 
 // ─── VIDEO / DEPOSITIONS ──────────────────────────────────────────

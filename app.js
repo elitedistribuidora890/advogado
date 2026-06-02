@@ -9,7 +9,7 @@ import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } f
 
 // ─── CONFIG ──────────────────────────────────────────────────────
 const firebaseConfig = {
-  apiKey: "SUA_API_KEY",
+  apiKey: "AIzaSyALU3x5WnXquu78j19ff3ZOLroHCp2u10w",
   authDomain: "advogado-e6c61.firebaseapp.com",
   projectId: "advogado-e6c61",
   storageBucket: "advogado-e6c61.firebasestorage.app",
@@ -18,11 +18,7 @@ const firebaseConfig = {
   measurementId: "G-EWD46XF6RR"
 };
 
-state.fbApp = initializeApp(firebaseConfig);
-state.fbAuth = getAuth(state.fbApp);
-state.fbDb = getFirestore(state.fbApp);
-state.fbStorage = getStorage(state.fbApp);
-state.fbReady = true;
+
 const CONFIG_KEY = 'lexis_config'
 
 function loadConfig() {
@@ -34,7 +30,10 @@ function saveConfig(cfg) {
 function getGroqKey() {
   return "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"
 }
-function getGroqModel() { return loadConfig().groqModel || 'llama-3.3-70b-versatile' }
+
+function getGroqModel() {
+  return "llama-3.3-70b-versatile"
+}
 
 // ─── ESTADO GLOBAL ────────────────────────────────────────────────
 
@@ -61,9 +60,8 @@ let state = {
 
 function initFirebase() {
   try {
-
     const firebaseConfig = {
-      apiKey: "AIzaSyALU3x5WnXquu78j19ff3ZOLroHCp2u10w",
+       apiKey: "AIzaSyALU3x5WnXquu78j19ff3ZOLroHCp2u10w",
   authDomain: "advogado-e6c61.firebaseapp.com",
   projectId: "advogado-e6c61",
   storageBucket: "advogado-e6c61.firebasestorage.app",
@@ -74,29 +72,19 @@ function initFirebase() {
 
     const apps = getApps()
 
-    if (apps.length > 0) {
-      state.fbApp = apps[0]
-    } else {
-      state.fbApp = initializeApp(firebaseConfig)
-    }
-
+    state.fbApp = apps.length ? apps[0] : initializeApp(firebaseConfig)
     state.fbAuth = getAuth(state.fbApp)
     state.fbDb = getFirestore(state.fbApp)
     state.fbStorage = getStorage(state.fbApp)
-
     state.fbReady = true
 
-    console.log("Firebase conectado!")
-
     return true
-
   } catch (e) {
     console.error("Erro Firebase:", e)
     state.fbReady = false
     return false
   }
 }
-
 // ─── FFMPEG (CDN — sem Node.js) ───────────────────────────────────
 
 let _ffmpeg = null

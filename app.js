@@ -537,9 +537,24 @@ window.handleLogin = async function() {
   el('login-error').style.display = 'none'
 
   try {
+    // ── Modo Demo: Firebase não configurado → entra localmente ──
     if (!state.fbReady || !state.fbAuth) {
-      throw new Error('Firebase não configurado. Configure em Configurações antes de fazer login.')
+      const cfg = loadConfig()
+      const name = cfg.userName || email.split('@')[0]
+      state.currentUser = {
+        id: 'demo-' + Date.now(),
+        name,
+        email,
+        role: 'admin',
+        firm: cfg.firmName || 'Lexis AI',
+        avatar: name[0].toUpperCase(),
+        plan: 'Demo'
+      }
+      showApp()
+      return
     }
+
+    // ── Modo Firebase ──
     const cred = await signInWithEmailAndPassword(state.fbAuth, email, password)
     const u = cred.user
     const cfg = loadConfig()
@@ -648,14 +663,26 @@ async function renderDashboard() {
 
   let cases = []
   try { cases = await getCases() } catch {}
-  state.cases = cases
+  // Include locally-created demo cases
+  if (!state.fbReady) {
+    cases = state.cases.filter(c => c.id?.startsWith('local-'))
+  } else {
+    state.cases = cases
+  }
 
   const active = cases.filter(c => c.status === 'active').length
   const closed = cases.filter(c => c.status === 'closed').length
   const pending = cases.filter(c => c.status === 'pending').length
   const highRisk = cases.filter(c => c.riskLevel === 'high').length
 
+  const demoBanner = !state.fbReady ? `
+    <div class="alert-warn" style="margin-bottom:20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span>⚙️ <strong>Modo Demo</strong> — Firebase não configurado. Os dados ficam apenas nesta sessão.</span>
+      <button class="btn btn-sm btn-secondary" onclick="navigate('settings',document.querySelector('.nav-item[data-page=settings]'))" style="margin-left:auto">Configurar Firebase</button>
+    </div>` : ''
+
   set('main-content', `
+    ${demoBanner}
     <div class="grid-4" style="margin-bottom:24px">
       ${metricCard('Casos Ativos', active, 'Em andamento', 'var(--accent-blue)')}
       ${metricCard('Pendentes', pending, 'Aguardando ação', 'var(--risk-med)')}
@@ -1750,11 +1777,16 @@ window.newCaseNav = function(dir) {
 }
 
 window.submitNewCase = async function() {
-  if (!state.fbReady) { alert('Firebase não configurado. Configure em Configurações antes de criar casos.'); return }
   const btn = el('nc-submit-btn')
   btn.disabled = true; btn.innerHTML = `${spinner()} Criando…`
   try {
-    const c = await createCase({ ...state.newCaseData, createdAt: new Date().toISOString(), completionPct: 0, aiAlerts: 0, documents: 0 })
+    let c
+    if (!state.fbReady) {
+      // Modo demo: salva localmente na sessão
+      c = { id: 'local-' + Date.now(), ...state.newCaseData, createdAt: new Date().toISOString(), completionPct: 0, aiAlerts: 0, documents: 0, status: state.newCaseData.status || 'active' }
+    } else {
+      c = await createCase({ ...state.newCaseData, createdAt: new Date().toISOString(), completionPct: 0, aiAlerts: 0, documents: 0 })
+    }
     state.selectedCase = c
     state.cases.unshift(c)
     state.newCaseStep = 1; state.newCaseData = {}

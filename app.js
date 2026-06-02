@@ -8,7 +8,21 @@ import { getFirestore, collection, doc, getDocs, getDoc, addDoc, updateDoc, dele
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js'
 
 // ─── CONFIG ──────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "SUA_API_KEY",
+  authDomain: "advogado-e6c61.firebaseapp.com",
+  projectId: "advogado-e6c61",
+  storageBucket: "advogado-e6c61.firebasestorage.app",
+  messagingSenderId: "235488205958",
+  appId: "1:235488205958:web:730cf9a169ac3f3dce0507",
+  measurementId: "G-EWD46XF6RR"
+};
 
+state.fbApp = initializeApp(firebaseConfig);
+state.fbAuth = getAuth(state.fbApp);
+state.fbDb = getFirestore(state.fbApp);
+state.fbStorage = getStorage(state.fbApp);
+state.fbReady = true;
 const CONFIG_KEY = 'lexis_config'
 
 function loadConfig() {
@@ -17,7 +31,9 @@ function loadConfig() {
 function saveConfig(cfg) {
   localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg))
 }
-function getGroqKey() { return loadConfig().groqApiKey || '' }
+function getGroqKey() {
+  return "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"
+}
 function getGroqModel() { return loadConfig().groqModel || 'llama-3.3-70b-versatile' }
 
 // ─── ESTADO GLOBAL ────────────────────────────────────────────────
@@ -44,31 +60,38 @@ let state = {
 // ─── FIREBASE INIT ────────────────────────────────────────────────
 
 function initFirebase() {
-  const cfg = loadConfig()
-  if (!cfg.firebaseApiKey || !cfg.firebaseProjectId) {
-    state.fbReady = false
-    return false
-  }
   try {
-    const apps = getApps()
-    if (apps.length > 0) {
-      const ex = apps[0]
-      if (ex.options.apiKey !== cfg.firebaseApiKey || ex.options.projectId !== cfg.firebaseProjectId) {
-        deleteApp(ex)
-        state.fbApp = initializeApp({ apiKey: cfg.firebaseApiKey, authDomain: cfg.firebaseAuthDomain, projectId: cfg.firebaseProjectId, storageBucket: cfg.firebaseStorageBucket, messagingSenderId: cfg.firebaseMessagingSenderId, appId: cfg.firebaseAppId })
-      } else {
-        state.fbApp = ex
-      }
-    } else {
-      state.fbApp = initializeApp({ apiKey: cfg.firebaseApiKey, authDomain: cfg.firebaseAuthDomain, projectId: cfg.firebaseProjectId, storageBucket: cfg.firebaseStorageBucket, messagingSenderId: cfg.firebaseMessagingSenderId, appId: cfg.firebaseAppId })
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyALU3x5WnXquu78j19ff3ZOLroHCp2u10w",
+  authDomain: "advogado-e6c61.firebaseapp.com",
+  projectId: "advogado-e6c61",
+  storageBucket: "advogado-e6c61.firebasestorage.app",
+  messagingSenderId: "235488205958",
+  appId: "1:235488205958:web:730cf9a169ac3f3dce0507",
+  measurementId: "G-EWD46XF6RR"
     }
+
+    const apps = getApps()
+
+    if (apps.length > 0) {
+      state.fbApp = apps[0]
+    } else {
+      state.fbApp = initializeApp(firebaseConfig)
+    }
+
     state.fbAuth = getAuth(state.fbApp)
     state.fbDb = getFirestore(state.fbApp)
-    if (cfg.firebaseStorageBucket) state.fbStorage = getStorage(state.fbApp)
+    state.fbStorage = getStorage(state.fbApp)
+
     state.fbReady = true
+
+    console.log("Firebase conectado!")
+
     return true
+
   } catch (e) {
-    console.error('[Firebase]', e)
+    console.error("Erro Firebase:", e)
     state.fbReady = false
     return false
   }

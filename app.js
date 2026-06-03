@@ -92,13 +92,19 @@ let _ffmpeg = null
 async function loadFFmpeg() {
   if (state.ffmpegReady && _ffmpeg) return _ffmpeg
   if (state.ffmpegLoading) {
-    // Aguarda carregamento em progresso
     return new Promise(resolve => {
       const check = setInterval(() => {
-        if (state.ffmpegReady) { clearInterval(check); resolve(_ffmpeg) }
+        if (state.ffmpegReady || !state.ffmpegLoading) { clearInterval(check); resolve(_ffmpeg) }
       }, 200)
     })
   }
+
+  // FFmpeg WASM requer SharedArrayBuffer + COOP/COEP headers — não disponível em mobile/local sem servidor adequado
+  if (typeof SharedArrayBuffer === 'undefined') {
+    console.warn('[FFmpeg] SharedArrayBuffer indisponível (mobile ou servidor sem COOP/COEP). FFmpeg desativado.')
+    return null
+  }
+
   state.ffmpegLoading = true
   try {
     const { FFmpeg } = await import('https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js')
@@ -110,7 +116,6 @@ async function loadFFmpeg() {
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
     })
-    // Expõe fetchFile globalmente para uso interno
     _ffmpeg._fetchFile = fetchFile
     state.ffmpegReady = true
     state.ffmpegLoading = false
@@ -118,7 +123,7 @@ async function loadFFmpeg() {
     return _ffmpeg
   } catch (e) {
     state.ffmpegLoading = false
-    console.error('[FFmpeg] Falha ao carregar:', e)
+    console.warn('[FFmpeg] Falha ao carregar:', e.message)
     return null
   }
 }
@@ -166,11 +171,17 @@ async function convertToMp4(blob, onProgress) {
  * Útil para enviar apenas o áudio de depoimentos ao Firebase.
  */
 async function extractAudioMp3(blob, onProgress) {
+  // Tenta com FFmpeg se disponível (requer COOP/COEP — desktop/servidor)
+  const ffmpeg = await loadFFmpeg()
+  if (!ffmpeg) {
+    // Mobile ou ambiente sem SharedArrayBuffer: devolve o blob original
+    // Whisper da Groq aceita webm, mp4, ogg diretamente
+    onProgress?.({ stage: 'Áudio pronto (sem conversão)', pct: 100 })
+    return blob
+  }
+
   try {
     onProgress?.({ stage: 'Carregando FFmpeg…', pct: 5 })
-    const ffmpeg = await loadFFmpeg()
-    if (!ffmpeg) throw new Error('FFmpeg indisponível')
-
     const ext = blob.type.includes('webm') ? 'webm' : blob.type.includes('ogg') ? 'ogg' : blob.type.includes('mp4') ? 'mp4' : 'webm'
     const inputName = 'input.' + ext
     const outputName = 'audio.mp3'
@@ -179,13 +190,7 @@ async function extractAudioMp3(blob, onProgress) {
     ffmpeg.writeFile(inputName, await ffmpeg._fetchFile(blob))
 
     onProgress?.({ stage: 'Extraindo áudio…', pct: 35 })
-    await ffmpeg.exec([
-      '-i', inputName,
-      '-vn',              // sem vídeo
-      '-c:a', 'libmp3lame',
-      '-b:a', '128k',
-      '-y', outputName
-    ])
+    await ffmpeg.exec(['-i', inputName, '-vn', '-c:a', 'libmp3lame', '-b:a', '128k', '-y', outputName])
 
     onProgress?.({ stage: 'Concluindo…', pct: 90 })
     const data = await ffmpeg.readFile(outputName)
@@ -630,8 +635,6 @@ function showApp() {
   set('sidebar-avatar', u.avatar || u.name[0].toUpperCase())
   set('sidebar-user-name', u.name)
   navigate('dashboard', document.querySelector('.nav-item[data-page="dashboard"]'))
-  // Pré-carrega FFmpeg em segundo plano
-  loadFFmpeg().catch(() => {})
 }
 
 // ─── HEADER ───────────────────────────────────────────────────────
@@ -2349,6 +2352,10 @@ window.startVideoRecording = function() {
     <button class="btn btn-danger" onclick="stopVideoRecording()">
       <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" fill="currentColor"/></svg>
       Finalizar Gravação
+    </button>
+    <button class="btn btn-ghost btn-sm" onclick="retakeVideo()" style="display:flex;align-items:center;gap:6px" title="Descartar e regravar">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M1 4v6h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.51 15a9 9 0 1 0 .49-5.66L1 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Refazer
     </button>`
 }
 
@@ -2524,6 +2531,62 @@ function updateRecAnalise(localId, analise) {
     state.recordings[idx] = { ...state.recordings[idx], analise, _analisando: false }
     renderRecordingsList(state.recordings)
   }
+}
+
+window.retakeVideo = async function() {
+  // Para gravação em curso e descarta os chunks
+  clearInterval(state.recordingTimer)
+  if (_videoMediaRecorder && _videoMediaRecorder.state !== 'inactive') {
+    _videoMediaRecorder.onstop = null // ignora o onVideoRecordingStop
+    _videoMediaRecorder.stop()
+  }
+  _videoMediaRecorder = null
+  _videoChunks = []
+  state.recordingElapsed = 0
+
+  // Para câmera atual e reinicia stream
+  cancelAnimationFrame(_canvasAnimFrame)
+  _videoStream?.getTracks().forEach(t => t.stop())
+  _videoStream = null
+
+  // Reseta UI para estado "câmera pronta"
+  el('rec-timer').style.display = 'none'
+  el('rec-timer').textContent = '00:00'
+  el('rec-title').textContent = 'Câmera Pronta'
+  el('rec-icon-wrap').innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><polygon points="23 7 16 12 23 17 23 7" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="5" width="15" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>'
+  el('rec-btns').innerHTML = `
+    <button class="btn btn-primary" onclick="startVideoRecording()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>
+      Gravar
+    </button>
+    <button class="btn btn-ghost btn-sm" id="flip-camera-btn" title="Câmera traseira" onclick="flipCamera()" style="display:flex;align-items:center;gap:6px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 7h-3.5l-1.5-2H9L7.5 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="1.5"/><path d="M16 5l2-2 2 2M18 3v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Girar
+    </button>
+    <button class="btn btn-ghost btn-sm" onclick="cancelVideoRecorder()">Cancelar</button>`
+
+  // Reinicia câmera com o mesmo facingMode
+  try {
+    _videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: _videoFacingMode }, audio: true })
+  } catch {
+    _videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true }).catch(() => null)
+  }
+  if (!_videoStream) return
+
+  const videoEl = el('dep-video-preview')
+  videoEl.srcObject = _videoStream
+  await videoEl.play()
+
+  await new Promise(resolve => {
+    if (videoEl.videoWidth > 0) return resolve()
+    videoEl.onloadedmetadata = resolve
+    setTimeout(resolve, 1500)
+  })
+
+  const canvas = el('dep-canvas')
+  if (canvas) { canvas.width = videoEl.videoWidth || 1280; canvas.height = videoEl.videoHeight || 720 }
+
+  startCanvasLoop()
 }
 
 window.cancelVideoRecorder = function() {

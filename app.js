@@ -1940,7 +1940,9 @@ async function loadRecordingsFromFirebase() {
   if (!c) { renderRecordingsList([]); return }
   try {
     const recs = await getRecordingsForCase(c.id)
+    // Merge e salva em state.recordings para que watchRecording/downloadRec achem pelo id
     const merged = [...state.recordings, ...recs.filter(r => !state.recordings.find(lr => lr.id === r.id))]
+    state.recordings = merged
     renderRecordingsList(merged)
     const cnt = el('rec-count')
     if (cnt && merged.length > 0) { cnt.textContent = merged.length; cnt.style.display = 'inline-flex' }
@@ -2738,7 +2740,8 @@ window.viewAiAnalysis = function(id) {
 }
 
 window.watchRecording = function(id) {
-  const rec = state.recordings.find(r => r.id === id); if (!rec) return
+  const rec = state.recordings.find(r => r.id === id)
+  if (!rec) { alert('Registro não encontrado. Recarregue a página e tente novamente.'); return }
   const url = rec.videoUrl || rec.url || (rec._blob ? URL.createObjectURL(rec._blob) : null)
   if (!url) { alert('URL do vídeo não disponível.'); return }
 
@@ -2749,64 +2752,105 @@ window.watchRecording = function(id) {
   const name = rec.nomePessoa || 'Depoimento'
   const modal = document.createElement('div')
   modal.id = 'video-watch-modal'
-  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px'
-  modal.innerHTML = `
-    <div style="width:100%;max-width:860px;display:flex;flex-direction:column;gap:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="color:#fff;font-size:14px;font-weight:600;opacity:0.9">▶ ${name} — ${rec.tipoDepoimento || ''}</div>
-        <button onclick="document.getElementById('video-watch-modal').remove()" style="background:rgba(255,255,255,0.12);border:none;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center">✕</button>
-      </div>
-      <video
-        src="${url}"
-        controls
-        autoplay
-        playsinline
-        style="width:100%;max-height:70vh;border-radius:8px;background:#000;outline:none"
-        controlsList="nodownload"
-      ></video>
-      <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" onclick="downloadRec('${id}')" style="color:#fff;border-color:rgba(255,255,255,0.2)">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          Baixar Vídeo
-        </button>
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('video-watch-modal').remove()" style="color:#fff;border-color:rgba(255,255,255,0.2)">Fechar</button>
-      </div>
-    </div>`
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;-webkit-overflow-scrolling:touch'
 
-  // Fecha ao clicar fora do vídeo
+  // Cria elementos via DOM (mais compatível que innerHTML para video em iOS/Safari)
+  const inner = document.createElement('div')
+  inner.style.cssText = 'width:100%;max-width:860px;display:flex;flex-direction:column;gap:12px'
+
+  const header = document.createElement('div')
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between'
+  header.innerHTML = `<div style="color:#fff;font-size:14px;font-weight:600;opacity:0.9">▶ ${name} — ${rec.tipoDepoimento || ''}</div>`
+  const closeBtn = document.createElement('button')
+  closeBtn.textContent = '✕'
+  closeBtn.style.cssText = 'background:rgba(255,255,255,0.12);border:none;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center'
+  closeBtn.onclick = () => modal.remove()
+  header.appendChild(closeBtn)
+
+  const video = document.createElement('video')
+  video.src = url
+  video.controls = true
+  video.autoplay = true
+  video.setAttribute('playsinline', '')
+  video.setAttribute('webkit-playsinline', '')
+  video.style.cssText = 'width:100%;max-height:70vh;border-radius:8px;background:#000;outline:none;display:block'
+
+  // Trata erro de carregamento
+  video.onerror = () => {
+    video.style.display = 'none'
+    const errMsg = document.createElement('div')
+    errMsg.style.cssText = 'color:#ff6b6b;padding:24px;text-align:center;font-size:13px'
+    errMsg.textContent = 'Não foi possível reproduzir o vídeo neste dispositivo. Use o botão Baixar Vídeo.'
+    inner.insertBefore(errMsg, footer)
+  }
+
+  const footer = document.createElement('div')
+  footer.style.cssText = 'display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap'
+
+  const dlBtn = document.createElement('button')
+  dlBtn.className = 'btn btn-ghost btn-sm'
+  dlBtn.style.cssText = 'color:#fff;border-color:rgba(255,255,255,0.2)'
+  dlBtn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Baixar Vídeo`
+  dlBtn.onclick = () => downloadRec(id)
+
+  const closeBtnFooter = document.createElement('button')
+  closeBtnFooter.className = 'btn btn-ghost btn-sm'
+  closeBtnFooter.style.cssText = 'color:#fff;border-color:rgba(255,255,255,0.2)'
+  closeBtnFooter.textContent = 'Fechar'
+  closeBtnFooter.onclick = () => modal.remove()
+
+  footer.appendChild(dlBtn)
+  footer.appendChild(closeBtnFooter)
+  inner.appendChild(header)
+  inner.appendChild(video)
+  inner.appendChild(footer)
+  modal.appendChild(inner)
+
+  // Fecha ao clicar no fundo escuro
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove() })
   document.body.appendChild(modal)
 }
 
 window.downloadRec = async function(id) {
-  const rec = state.recordings.find(r => r.id === id); if (!rec) return
+  const rec = state.recordings.find(r => r.id === id)
+  if (!rec) { alert('Registro não encontrado. Recarregue a página e tente novamente.'); return }
   const fileName = rec.nomeArquivo || ((rec.nomePessoa || 'depoimento').replace(/\s+/g,'_') + '.mp4')
+
+  function triggerDownload(blobUrl, name) {
+    const a = document.createElement('a')
+    a.href = blobUrl
+    a.download = name
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(blobUrl) }, 10000)
+  }
 
   // Vídeo local (Blob em memória) — download direto
   if (rec._blob) {
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(rec._blob)
-    a.download = fileName
-    a.click()
+    triggerDownload(URL.createObjectURL(rec._blob), fileName)
     return
   }
 
   const url = rec.videoUrl || rec.url
   if (!url) { alert('URL do vídeo não disponível.'); return }
 
-  // Tenta fetch para forçar download (contorna bloqueio CORS do Firebase)
+  // Tenta fetch para forçar download como Blob (resolve CORS Firebase em desktop)
   try {
-    const res = await fetch(url)
+    const res = await fetch(url, { mode: 'cors' })
     if (!res.ok) throw new Error('HTTP ' + res.status)
     const blob = await res.blob()
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = fileName
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000)
+    triggerDownload(URL.createObjectURL(blob), fileName)
   } catch {
-    // Fallback: abre em nova aba para o usuário baixar manualmente
-    window.open(url, '_blank')
+    // Fallback para iOS/Safari/mobile: abre a URL diretamente (usuário segura para salvar)
+    const a = document.createElement('a')
+    a.href = url
+    a.target = '_blank'
+    a.rel = 'noopener'
+    a.style.display = 'none'
+    document.body.appendChild(a)
+    a.click()
+    setTimeout(() => document.body.removeChild(a), 1000)
   }
 }
 

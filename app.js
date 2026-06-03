@@ -2146,6 +2146,8 @@ window.tapToFocus = async function(event) {
     // Silencia — dispositivo pode não suportar foco manual pontual
   }
 }
+
+function requestGps() {
   set('gps-status-bar', '📍 Solicitando localização GPS…')
   _videoGpsData.statusGps = 'solicitando'
 

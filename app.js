@@ -1890,7 +1890,7 @@ function renderVideo() {
 
           <!-- Canvas com overlay — é o que será gravado — portrait 9:16 -->
           <div style="display:flex;justify-content:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px">
-            <canvas id="dep-canvas" style="width:auto;height:420px;max-width:100%;display:block;object-fit:contain"></canvas>
+            <canvas id="dep-canvas" style="width:100%;max-height:480px;display:block;object-fit:contain;border-radius:4px"></canvas>
             <video id="dep-video-preview" autoplay muted playsinline style="display:none"></video>
           </div>
           
@@ -1964,15 +1964,14 @@ window.initVideoRecorder = async function() {
   el('video-form-card').style.display = 'none'
   el('video-recorder-section').style.display = 'block'
 
-  // Solicita câmera + microfone — portrait (celular 9:16)
+  // Solicita câmera + microfone — sem forçar resolução/aspecto, deixa a câmera decidir
   _videoFacingMode = 'user'
   try {
     _videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: _videoFacingMode, aspectRatio: { ideal: 9/16 } },
+      video: { facingMode: _videoFacingMode },
       audio: true
     })
   } catch (err) {
-    // Fallback sem restrição de proporção
     try {
       _videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
     } catch (err2) {
@@ -1983,15 +1982,24 @@ window.initVideoRecorder = async function() {
     }
   }
 
-  // Conecta vídeo ao preview (sem exibir, só para capturar frame)
+  // Conecta vídeo ao preview e aguarda metadados para ler resolução real
   const videoEl = el('dep-video-preview')
   videoEl.srcObject = _videoStream
   await videoEl.play()
 
-  // Configura canvas portrait 9:16
+  // Aguarda resolução real da câmera ficar disponível
+  await new Promise(resolve => {
+    if (videoEl.videoWidth > 0) return resolve()
+    videoEl.onloadedmetadata = resolve
+    setTimeout(resolve, 1500) // fallback
+  })
+
+  // Ajusta canvas para o aspecto real da câmera (sem distorção)
   const canvas = el('dep-canvas')
-  canvas.width = 720
-  canvas.height = 1280
+  const vw = videoEl.videoWidth || 1280
+  const vh = videoEl.videoHeight || 720
+  canvas.width = vw
+  canvas.height = vh
 
   // Inicia loop de renderização do canvas
   startCanvasLoop()
@@ -2013,7 +2021,7 @@ window.flipCamera = async function() {
 
   try {
     _videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: _videoFacingMode, aspectRatio: { ideal: 9/16 } },
+      video: { facingMode: _videoFacingMode },
       audio: true
     })
   } catch {
@@ -2030,6 +2038,18 @@ window.flipCamera = async function() {
   const videoEl = el('dep-video-preview')
   videoEl.srcObject = _videoStream
   await videoEl.play()
+
+  // Aguarda resolução real e reajusta canvas
+  await new Promise(resolve => {
+    if (videoEl.videoWidth > 0) return resolve()
+    videoEl.onloadedmetadata = resolve
+    setTimeout(resolve, 1500)
+  })
+  const canvas = el('dep-canvas')
+  if (canvas && videoEl.videoWidth > 0) {
+    canvas.width = videoEl.videoWidth
+    canvas.height = videoEl.videoHeight
+  }
 
   // Atualiza ícone do botão
   const btn = el('flip-camera-btn')
@@ -2092,9 +2112,18 @@ function startCanvasLoop() {
     if (!canvas) return
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // Desenha frame do vídeo
     if (videoEl && videoEl.readyState >= 2) {
-      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height)
+      // Desenha mantendo o aspecto real do vídeo (sem distorção)
+      const vw = videoEl.videoWidth
+      const vh = videoEl.videoHeight
+      if (vw > 0 && vh > 0) {
+        // Se o canvas ficou com tamanho diferente do vídeo (ex: após flip), reajusta
+        if (canvas.width !== vw || canvas.height !== vh) {
+          canvas.width = vw
+          canvas.height = vh
+        }
+        ctx.drawImage(videoEl, 0, 0, vw, vh)
+      }
     } else {
       ctx.fillStyle = '#1a1a1a'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
@@ -2116,68 +2145,72 @@ function drawWatermark(ctx, W, H) {
   const processo = el('dep-processo')?.value || '—'
   const gps = _videoGpsData
 
-  // Overlay escuro no rodapé — mais alto em portrait
-  const overlayH = 220
-  ctx.fillStyle = 'rgba(0,0,0,0.78)'
-  ctx.fillRect(0, H - overlayH, W, overlayH)
-
-  ctx.textBaseline = 'top'
   const PAD = 18
+  const maxW = W - PAD * 2
+  ctx.textBaseline = 'top'
+
+  // Sombra dupla para legibilidade em qualquer fundo (claro ou escuro)
+  function setShadow(ctx) {
+    ctx.shadowColor = 'rgba(0,0,0,0.95)'
+    ctx.shadowBlur = 8
+    ctx.shadowOffsetX = 1
+    ctx.shadowOffsetY = 1
+  }
+  function clearShadow(ctx) {
+    ctx.shadowColor = 'transparent'
+    ctx.shadowBlur = 0
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
+  }
+
+  // Posição do rodapé
+  const overlayH = 220
   let y = H - overlayH + 14
 
-  // Linha 1: Data/Hora
+  setShadow(ctx)
+
+  // Linha 1: Data/Hora — branco puro, sempre visível
   ctx.fillStyle = '#ffffff'
   ctx.font = 'bold 22px monospace'
   ctx.fillText(`${dateStr}  ${timeStr}`, PAD, y); y += 32
 
-  // Linha 2: Nome + Tipo
+  // Linha 2: Nome + Tipo — amarelo forte com contorno escuro
   ctx.font = 'bold 20px monospace'
   ctx.fillStyle = '#ffe066'
   const nomeStr = `${nomePessoa}  |  ${tipo}`
-  const maxW = W - PAD * 2
   let ns = nomeStr
   while (ctx.measureText(ns).width > maxW && ns.length > 6) ns = ns.slice(0,-2) + '…'
   ctx.fillText(ns, PAD, y); y += 30
 
   // Linha 3: Processo
   ctx.font = '17px monospace'
-  ctx.fillStyle = '#a0c4ff'
+  ctx.fillStyle = '#ffffff'
   ctx.fillText(`Processo: ${processo}`, PAD, y); y += 26
 
-  // Linha 4: GPS lat/lng/alt/precisão
+  // Linha 4: GPS lat/lng
   const latStr = gps.latitude != null ? `Lat: ${gps.latitude.toFixed(6)}` : 'Lat: —'
   const lngStr = gps.longitude != null ? `Lng: ${gps.longitude.toFixed(6)}` : 'Lng: —'
   const altStr = gps.altitude != null ? `Alt: ${gps.altitude.toFixed(1)}m` : ''
   const accStr = gps.precisaoGps != null ? `±${Math.round(gps.precisaoGps)}m` : ''
-  ctx.fillStyle = '#88ff88'
+  ctx.fillStyle = '#ffffff'
   ctx.font = '15px monospace'
   ctx.fillText(`${latStr}  ${lngStr}`, PAD, y); y += 22
   if (altStr || accStr) { ctx.fillText(`${altStr}  ${accStr}`.trim(), PAD, y); y += 22 }
 
   // Linha 5: Endereço/CEP
   const endLine = [gps.endereco, gps.cep ? 'CEP ' + gps.cep : '', gps.cidade, gps.estado].filter(Boolean).join('  |  ')
-  ctx.fillStyle = '#cccccc'
+  ctx.fillStyle = '#ffffff'
   ctx.font = '14px monospace'
   let endTrunc = endLine || ('GPS: ' + gps.statusGps)
   while (ctx.measureText(endTrunc).width > maxW && endTrunc.length > 8) endTrunc = endTrunc.slice(0,-2) + '…'
   ctx.fillText(endTrunc, PAD, y); y += 20
 
   // Linha 6: Status GPS
-  ctx.fillStyle = '#999999'
+  ctx.fillStyle = '#ffffff'
   ctx.font = '12px monospace'
   ctx.fillText(`GPS: ${gps.statusGps}`, PAD, y)
 
-  // Marca d'água "LEXIS AI" no canto superior — tamanho portrait
-  ctx.save()
-  ctx.globalAlpha = 0.30
-  ctx.fillStyle = '#ffffff'
-  ctx.font = 'bold 17px monospace'
-  ctx.textAlign = 'right'
-  ctx.fillText('LEXIS AI', W - PAD, PAD)
-  ctx.font = '13px monospace'
-  ctx.fillText('INSTRUÇÃO CONCENTRADA', W - PAD, PAD + 22)
-  ctx.restore()
-  ctx.textAlign = 'left'
+  
 }
 
 window.startVideoRecording = function() {

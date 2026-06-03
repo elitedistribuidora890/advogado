@@ -1894,9 +1894,9 @@ function renderVideo() {
           <!-- Canvas com overlay — é o que será gravado — portrait 9:16 -->
           <div id="camera-preview-wrap" style="display:flex;justify-content:center;align-items:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px;min-height:240px;max-height:520px;position:relative;cursor:crosshair" onclick="tapToFocus(event)">
             <video id="dep-video-preview" autoplay muted playsinline style="width:100%;height:100%;max-height:520px;object-fit:contain;display:block"></video>
+            <canvas id="dep-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
             <div id="focus-ring" style="display:none;position:absolute;width:56px;height:56px;border:2px solid #ffe066;border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.5);transition:opacity 0.3s"></div>
           </div>
-          <canvas id="dep-canvas" style="display:none"></canvas>
           
           <div style="display:flex;gap:10px;flex-wrap:wrap" id="rec-btns">
             <button class="btn btn-primary" onclick="startVideoRecording()">
@@ -2202,21 +2202,27 @@ function startCanvasLoop() {
   function drawFrame() {
     if (!canvas) return
 
-    if (videoEl && videoEl.readyState >= 2) {
+    // Sincroniza tamanho do canvas com o vídeo real (para gravar com proporção correta)
+    if (videoEl && videoEl.videoWidth > 0) {
       const vw = videoEl.videoWidth
       const vh = videoEl.videoHeight
-      if (vw > 0 && vh > 0) {
-        if (canvas.width !== vw || canvas.height !== vh) {
-          canvas.width = vw
-          canvas.height = vh
-        }
-        ctx.drawImage(videoEl, 0, 0, vw, vh)
+      if (canvas.width !== vw || canvas.height !== vh) {
+        canvas.width = vw
+        canvas.height = vh
       }
-    } else {
-      ctx.fillStyle = '#1a1a1a'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
     }
 
+    // Limpa completamente (fundo transparente no preview)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    // Durante gravação: desenha o frame do vídeo para o MediaRecorder capturar
+    if (_videoMediaRecorder && _videoMediaRecorder.state === 'recording') {
+      if (videoEl && videoEl.readyState >= 2 && canvas.width > 0) {
+        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height)
+      }
+    }
+
+    // Sempre desenha as informações por cima
     drawWatermark(ctx, canvas.width, canvas.height)
 
     _canvasAnimFrame = requestAnimationFrame(drawFrame)
@@ -2514,6 +2520,13 @@ window.saveRecToFirebase = async function(localId) {
   if (!c) { alert('Selecione um caso antes de salvar.'); return }
   if (!state.fbStorage) { alert('Firebase Storage não configurado.'); return }
 
+  // Verifica se usuário está autenticado no Firebase Auth
+  const authUser = state.fbAuth?.currentUser
+  if (!authUser) {
+    alert('Sessão expirada. Faça login novamente.')
+    return
+  }
+
   // Desabilita botão e mostra progresso
   const btn = el(`save-fb-btn-${localId}`)
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando…' }
@@ -2554,7 +2567,7 @@ window.saveRecToFirebase = async function(localId) {
       snap.forEach(d => updateDoc(d.ref, { analise: rec.analise }).catch(() => {}))
     }
 
-    if (progressLabel) progressLabel.textContent = '✓ Salvo no banco de dados com relatório IA!'
+    if (progressLabel) progressLabel.textContent = '✓ Salvo no Firebase com relatório IA!'
 
     // Atualiza o registro local para refletir que foi salvo
     const idx = state.recordings.findIndex(r => r.id === localId)
@@ -2567,8 +2580,15 @@ window.saveRecToFirebase = async function(localId) {
 
   } catch (err) {
     console.warn('[Salvar Firebase]', err.message)
+    let msg = err.message
+    if (err.message?.includes('unauthorized') || err.message?.includes('permission')) {
+      msg = 'Sem permissão no Firebase Storage. Corrija as regras no console do Firebase:\n\nStorage → Rules → cole:\nrules_version = \'2\';\nservice firebase.storage {\n  match /b/{bucket}/o {\n    match /{allPaths=**} {\n      allow read, write: if request.auth != null;\n    }\n  }\n}'
+    }
     if (progressLabel) { progressLabel.style.color = 'var(--risk-high)'; progressLabel.textContent = '✗ Erro: ' + err.message }
-    if (btn) { btn.disabled = false; btn.textContent = 'Salvar Firebase' }
+    if (err.message?.includes('unauthorized') || err.message?.includes('permission')) {
+      alert(msg)
+    }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" stroke-width="1.5"/><polyline points="17 21 17 13 7 13 7 21" stroke="currentColor" stroke-width="1.5"/><polyline points="7 3 7 8 15 8" stroke="currentColor" stroke-width="1.5"/></svg> Salvar Firebase' }
   }
 }
 
@@ -2687,7 +2707,7 @@ function renderRecordingsList(recs) {
           ${v.analise && !v.analise.erro ? `<button class="btn btn-ghost btn-sm" onclick="viewAiAnalysis('${v.id}')">🔍 Ver IA</button>` : ''}
           ${v._local && !v._analisando && v._blob ? `<button class="btn btn-primary btn-sm" id="save-fb-btn-${v.id}" onclick="saveRecToFirebase('${v.id}')" style="background:var(--accent-teal);border-color:var(--accent-teal)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" stroke-width="1.5"/><polyline points="17 21 17 13 7 13 7 21" stroke="currentColor" stroke-width="1.5"/><polyline points="7 3 7 8 15 8" stroke="currentColor" stroke-width="1.5"/></svg>
-            Salvar Video
+            Salvar Firebase
           </button>` : ''}
         </div>
       </div>

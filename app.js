@@ -433,7 +433,7 @@ async function getDocumentsForCase(caseId) {
 async function getRecordingsForCase(caseId) {
   if (!state.fbReady || !state.fbDb) return []
   try {
-    const snap = await getDocs(query(collection(state.fbDb, 'cases', caseId, 'recordings'), orderBy('createdAt', 'desc')))
+    const snap = await getDocs(query(collection(state.fbDb, 'processos', caseId, 'videos'), orderBy('criadoEm', 'desc')))
     return snap.docs.map(d => ({ id: d.id, ...d.data() }))
   } catch (e) {
     console.error('[Firebase] getRecordings:', e)
@@ -482,56 +482,74 @@ async function uploadDocToFirebase(caseId, file, onProgress) {
 }
 
 /**
- * Upload de gravação de depoimento para Firebase Storage.
- * Usa FFmpeg para converter WebM → MP4 antes do envio.
- * Salva metadados em cases/{caseId}/recordings.
+ * Upload de vídeo de depoimento para Firebase Storage.
+ * Salva o vídeo renderizado via canvas (com marca d'água) em processos/{processoId}/videos.
+ * Salva metadados completos no Firestore em processos/{processoId}/videos.
  */
-async function uploadRecordingToFirebase(caseId, blob, meta, onProgress) {
-  // 1. Converte com FFmpeg (WebM → MP4)
-  let uploadBlob = blob
-  const isAudioOnly = !blob.type.includes('video')
-
-  if (isAudioOnly) {
-    // Áudio puro: extrai MP3
-    uploadBlob = await extractAudioMp3(blob, p => onProgress?.({ ...p, pct: Math.min(p.pct, 50) }))
-  } else {
-    // Vídeo: converte para MP4
-    uploadBlob = await convertToMp4(blob, p => onProgress?.({ ...p, pct: Math.min(p.pct, 50) }))
-  }
-
+async function uploadVideoToFirebase(processoId, blob, meta, onProgress) {
   if (!state.fbStorage) throw new Error('Firebase Storage não configurado.')
 
-  const ext = isAudioOnly ? 'mp3' : 'mp4'
-  const filename = `dep_${Date.now()}.${ext}`
-  const path = `cases/${caseId}/recordings/${filename}`
+  onProgress?.({ stage: 'Preparando envio…', pct: 5 })
+
+  // Gera nome do arquivo legível
+  const now = new Date()
+  const dateStr = `${String(now.getDate()).padStart(2,'0')}-${String(now.getMonth()+1).padStart(2,'0')}-${now.getFullYear()}`
+  const timeStr = `${String(now.getHours()).padStart(2,'0')}-${String(now.getMinutes()).padStart(2,'0')}`
+  const nomeSafe = (meta.nomePessoa || 'depoimento').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+  const tipoSafe = (meta.tipoDepoimento || 'video').toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
+  const nomeArquivo = `${tipoSafe}_${nomeSafe}_${dateStr}_${timeStr}.webm`
+  const path = `processos/${processoId}/videos/${nomeArquivo}`
+
   const fileRef = storageRef(state.fbStorage, path)
-  const task = uploadBytesResumable(fileRef, uploadBlob)
+  const task = uploadBytesResumable(fileRef, blob)
 
   return new Promise((resolve, reject) => {
     task.on('state_changed',
       snap => {
-        const pct = 50 + Math.round(snap.bytesTransferred / snap.totalBytes * 50)
-        onProgress?.({ stage: 'Enviando para o Firebase…', pct })
+        const pct = 10 + Math.round(snap.bytesTransferred / snap.totalBytes * 80)
+        onProgress?.({ stage: 'Enviando vídeo para Firebase…', pct })
       },
       reject,
       async () => {
-        const url = await getDownloadURL(task.snapshot.ref)
-        const recData = {
-          ...meta,
-          url,
-          storagePath: path,
-          format: ext,
-          createdAt: serverTimestamp(),
-          status: 'uploaded',
-          size: `${(uploadBlob.size / 1048576).toFixed(1)} MB`,
+        onProgress?.({ stage: 'Salvando metadados…', pct: 95 })
+        const downloadURL = await getDownloadURL(task.snapshot.ref)
+        const videoData = {
+          processoId,
+          numeroProcesso: meta.numeroProcesso || '',
+          tipoDepoimento: meta.tipoDepoimento || '',
+          nomePessoa: meta.nomePessoa || '',
+          advogado: meta.advogado || '',
+          dataInicio: meta.dataInicio || '',
+          dataFim: meta.dataFim || '',
+          duracao: meta.duracao || '',
+          latitude: meta.latitude ?? null,
+          longitude: meta.longitude ?? null,
+          altitude: meta.altitude ?? null,
+          precisaoGps: meta.precisaoGps ?? null,
+          cep: meta.cep || '',
+          bairro: meta.bairro || '',
+          cidade: meta.cidade || '',
+          estado: meta.estado || '',
+          endereco: meta.endereco || '',
+          statusGps: meta.statusGps || 'indisponível',
+          videoUrl: downloadURL,
+          nomeArquivo,
+          criadoEm: serverTimestamp(),
+          size: `${(blob.size / 1048576).toFixed(1)} MB`,
         }
         if (state.fbDb) {
-          await addDoc(collection(state.fbDb, 'cases', caseId, 'recordings'), recData)
+          await addDoc(collection(state.fbDb, 'processos', processoId, 'videos'), videoData)
         }
-        resolve({ ...recData, createdAt: new Date().toISOString() })
+        onProgress?.({ stage: 'Concluído!', pct: 100 })
+        resolve({ ...videoData, id: nomeArquivo, criadoEm: new Date().toISOString(), videoUrl: downloadURL })
       }
     )
   })
+}
+
+// Mantém compat com código legado
+async function uploadRecordingToFirebase(caseId, blob, meta, onProgress) {
+  return uploadVideoToFirebase(caseId, blob, meta, onProgress)
 }
 
 // ─── LOGIN / LOGOUT ───────────────────────────────────────────────
@@ -1810,68 +1828,100 @@ window.exportHearingNotes = function() {
 
 function renderVideo() {
   const c = state.selectedCase
-  const noCaseWarn = !c ? `<div class="alert-warn">⚠ Nenhum caso selecionado.</div>` : ''
+  const noCaseWarn = !c ? `<div class="alert-warn">⚠ Nenhum caso selecionado. Selecione um caso para gravar depoimentos.</div>` : ''
   set('main-content', `
     ${noCaseWarn}
-    <div class="grid-auto" style="align-items:start">
-      <div style="display:flex;flex-direction:column;gap:16px">
-        <div class="card" style="padding:24px" id="recorder-card">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
-            <div style="width:44px;height:44px;border-radius:50%;background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;border:1px solid var(--border)" id="rec-icon-wrap">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="color:var(--text-muted)"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke="currentColor" stroke-width="1.5"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            </div>
-            <div>
-              <div style="font-size:14px;font-weight:600" id="rec-title">Novo Depoimento</div>
-              <div style="font-size:12px;color:var(--text-muted)" id="rec-sub">Iniciar gravação ou fazer upload</div>
-            </div>
-            <div style="margin-left:auto;font-family:var(--font-mono);font-size:18px;font-weight:600;color:var(--risk-high);display:none" id="rec-timer">00:00</div>
+    <div style="display:flex;flex-direction:column;gap:20px;max-width:960px;margin:0 auto">
+
+      <!-- Formulário antes de gravar -->
+      <div class="card" style="padding:24px" id="video-form-card">
+        <div style="font-size:14px;font-weight:600;margin-bottom:18px">Novo Depoimento em Vídeo</div>
+        <div class="grid-2" style="gap:14px">
+          <div class="field">
+            <label>Nome da Pessoa *</label>
+            <input type="text" id="dep-nome" placeholder="Ex.: João da Silva" />
           </div>
-          <div id="rec-error" class="alert-error" style="display:none"></div>
-          <div id="ffmpeg-status" style="font-size:11px;color:var(--text-muted);margin-bottom:12px;display:none">
-            ${spinner()} FFmpeg carregando em segundo plano…
+          <div class="field">
+            <label>Tipo de Depoimento *</label>
+            <select id="dep-tipo">
+              <option value="Parte Autora">Parte Autora</option>
+              <option value="Parte Ré">Parte Ré</option>
+              <option value="Testemunha da Parte Autora">Testemunha da Parte Autora</option>
+              <option value="Testemunha da Parte Ré">Testemunha da Parte Ré</option>
+              <option value="Perito">Perito</option>
+              <option value="Outro">Outro</option>
+            </select>
           </div>
-          <div style="display:flex;gap:10px" id="rec-btns">
-            <button class="btn btn-primary btn-sm" onclick="startRecording()">
+          <div class="field">
+            <label>Número do Processo</label>
+            <input type="text" id="dep-processo" placeholder="${c?.number || '0000000-00.0000.0.00.0000'}" value="${c?.number || ''}" />
+          </div>
+          <div class="field">
+            <label>Advogado Responsável</label>
+            <input type="text" id="dep-advogado" placeholder="Dr. Nome Sobrenome" value="${state.currentUser?.name || ''}" />
+          </div>
+        </div>
+        <div style="margin-top:16px">
+          <button class="btn btn-primary" onclick="initVideoRecorder()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><polygon points="23 7 16 12 23 17 23 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="1" y="5" width="15" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>
+            Iniciar Câmera
+          </button>
+        </div>
+      </div>
+
+      <!-- Player de câmera + canvas com overlay -->
+      <div id="video-recorder-section" style="display:none">
+        <div class="card" style="padding:20px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+            <div id="rec-icon-wrap" style="width:40px;height:40px;border-radius:50%;background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;border:1px solid var(--border)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><polygon points="23 7 16 12 23 17 23 7" stroke="currentColor" stroke-width="1.5"/><rect x="1" y="5" width="15" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>
+            </div>
+            <div style="flex:1">
+              <div style="font-size:14px;font-weight:600" id="rec-title">Câmera Pronta</div>
+              <div style="font-size:12px;color:var(--text-muted)" id="rec-sub">GPS e localização sendo carregados…</div>
+            </div>
+            <div style="font-family:var(--font-mono);font-size:20px;font-weight:700;color:var(--risk-high);display:none" id="rec-timer">00:00</div>
+          </div>
+
+          <div id="rec-error" class="alert-error" style="display:none;margin-bottom:12px"></div>
+          <div id="gps-status-bar" style="font-size:11px;color:var(--text-muted);margin-bottom:12px;padding:8px 12px;background:var(--bg-elevated);border-radius:var(--radius-sm);border:1px solid var(--border)">
+            📍 Aguardando GPS…
+          </div>
+
+          <!-- Canvas com overlay — é o que será gravado -->
+          <div style="position:relative;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px">
+            <canvas id="dep-canvas" style="width:100%;display:block;max-height:400px;object-fit:contain"></canvas>
+            <video id="dep-video-preview" autoplay muted playsinline style="display:none"></video>
+          </div>
+
+          <div style="display:flex;gap:10px;flex-wrap:wrap" id="rec-btns">
+            <button class="btn btn-primary" onclick="startVideoRecording()">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>
-              Iniciar Gravação
+              Gravar
             </button>
-            <button class="btn btn-secondary btn-sm" onclick="el('audio-upload-input').click()">Upload de Áudio/Vídeo</button>
+            <button class="btn btn-ghost btn-sm" onclick="cancelVideoRecorder()">Cancelar</button>
           </div>
-          <input type="file" id="audio-upload-input" accept="audio/*,video/*" style="display:none" onchange="handleAudioUpload(event)" />
+
           <div id="ffmpeg-progress" style="display:none;margin-top:14px">
-            <div style="max-width:300px">${progressBar(0, 'var(--accent-teal)', 6)}</div>
+            <div style="max-width:400px">${progressBar(0, 'var(--accent-teal)', 6)}</div>
             <div id="ffmpeg-progress-label" style="font-size:12px;color:var(--text-muted);margin-top:6px">Processando…</div>
           </div>
         </div>
+      </div>
 
-        <div class="card" style="overflow:hidden">
-          <div style="padding:14px 20px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600">
-            Depoimentos${c ? ' — ' + c.title : ''}
-            <span id="rec-count" class="badge badge-blue" style="display:none;margin-left:8px">0</span>
-          </div>
-          <div id="recordings-list">
-            <div style="text-align:center;padding:24px">${spinner()}</div>
-          </div>
+      <!-- Histórico de vídeos -->
+      <div class="card" style="overflow:hidden">
+        <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px">
+          <span style="font-size:13px;font-weight:600">Depoimentos Gravados${c ? ' — ' + c.title : ''}</span>
+          <span id="rec-count" class="badge badge-blue" style="display:none;margin-left:auto">0</span>
+        </div>
+        <div id="recordings-list">
+          <div style="text-align:center;padding:24px">${spinner()}</div>
         </div>
       </div>
 
-      <div>
-        <div class="card" style="overflow:hidden">
-          <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
-            <span style="font-size:13px;font-weight:600">Transcrição IA</span>
-            <span id="transcript-spinner" style="display:none">${spinner()}</span>
-          </div>
-          <div id="transcript-content" style="padding:18px">
-            <div class="empty-state"><div class="empty-icon">📝</div><div class="empty-desc">Grave um depoimento para ver a transcrição</div></div>
-          </div>
-          <div id="transcript-actions" style="display:none;padding:12px 18px;border-top:1px solid var(--border)">
-            <button class="btn btn-secondary btn-sm" onclick="exportTranscript()">Exportar Transcrição</button>
-          </div>
-        </div>
-      </div>
     </div>
   `)
-
   loadRecordingsFromFirebase()
 }
 
@@ -1880,7 +1930,6 @@ async function loadRecordingsFromFirebase() {
   if (!c) { renderRecordingsList([]); return }
   try {
     const recs = await getRecordingsForCase(c.id)
-    // Mescla com gravações locais da sessão
     const merged = [...state.recordings, ...recs.filter(r => !state.recordings.find(lr => lr.id === r.id))]
     renderRecordingsList(merged)
     const cnt = el('rec-count')
@@ -1890,155 +1939,415 @@ async function loadRecordingsFromFirebase() {
   }
 }
 
-window.startRecording = async function() {
-  el('rec-error').style.display = 'none'
+// ─── ESTADO DE GRAVAÇÃO DE VÍDEO ──────────────────────────────────
+
+let _videoGpsData = {
+  latitude: null, longitude: null, altitude: null, precisaoGps: null,
+  cep: '', bairro: '', cidade: '', estado: '', endereco: '', statusGps: 'aguardando'
+}
+let _videoStream = null
+let _canvasAnimFrame = null
+let _videoMediaRecorder = null
+let _videoChunks = []
+let _videoStartTime = null
+
+window.initVideoRecorder = async function() {
+  const nome = el('dep-nome')?.value?.trim()
+  const tipo = el('dep-tipo')?.value
+  if (!nome) { alert('Informe o nome da pessoa antes de iniciar a câmera.'); return }
+
+  el('video-form-card').style.display = 'none'
+  el('video-recorder-section').style.display = 'block'
+
+  // Solicita câmera + microfone
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    state.mediaRecorder = new MediaRecorder(stream)
-    state.recordingChunks = []
-    state.recordingElapsed = 0
-    state.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) state.recordingChunks.push(e.data) }
-    state.mediaRecorder.onstop = () => {
-      const blob = new Blob(state.recordingChunks, { type: 'audio/webm' })
-      const c = state.selectedCase
-      const meta = {
-        name: `Depoimento — ${c?.clientName || 'Sem caso'} — ${new Date().toLocaleDateString('pt-BR')}`,
-        date: new Date().toLocaleDateString('pt-BR'),
-        duration: formatTime(state.recordingElapsed),
-        status: 'transcribed',
-        caseId: c?.id,
-      }
-      const rec = { id: `rec_${Date.now()}`, ...meta, url: URL.createObjectURL(blob), blob }
-      state.recordings.unshift(rec)
-      renderRecordingsList(state.recordings)
-      const cnt = el('rec-count')
-      if (cnt) { cnt.textContent = state.recordings.length; cnt.style.display = 'inline-flex' }
-      stream.getTracks().forEach(t => t.stop())
-
-      // Upload automático ao Firebase via FFmpeg
-      if (c && state.fbStorage) {
-        const progEl = el('ffmpeg-progress')
-        if (progEl) progEl.style.display = 'block'
-        uploadRecordingToFirebase(c.id, blob, meta, ({ stage, pct }) => {
-          if (progEl) {
-            progEl.querySelector('.progress-fill').style.width = pct + '%'
-            el('ffmpeg-progress-label').textContent = `${stage} (${pct}%)`
-          }
-        }).then(() => {
-          if (progEl) progEl.style.display = 'none'
-          el('ffmpeg-progress-label') && (el('ffmpeg-progress-label').textContent = '✓ Enviado ao Firebase')
-        }).catch(err => {
-          console.warn('[Upload]', err.message)
-          if (progEl) progEl.style.display = 'none'
-        })
-      }
-    }
-    state.mediaRecorder.start(1000)
-    clearInterval(state.recordingTimer)
-    state.recordingTimer = setInterval(() => {
-      state.recordingElapsed++
-      const t = el('rec-timer'); if (t) t.textContent = formatTime(state.recordingElapsed)
-    }, 1000)
-
-    el('rec-btns').innerHTML = `<button class="btn btn-danger btn-sm" onclick="stopRecording()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" fill="currentColor" stroke="currentColor" stroke-width="1.5"/></svg>Parar Gravação</button>`
-    el('rec-title').textContent = 'Gravando…'
-    el('rec-timer').style.display = 'block'
-    el('rec-icon-wrap').innerHTML = '<div class="record-dot"></div>'
-    const card = el('recorder-card'); if (card) { card.style.background = 'rgba(239,68,68,0.04)'; card.style.borderColor = 'rgba(239,68,68,0.2)' }
+    _videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: true
+    })
   } catch (err) {
-    el('rec-error').textContent = 'Erro ao acessar o microfone. Verifique as permissões do navegador.'; el('rec-error').style.display = 'block'
+    el('video-form-card').style.display = 'block'
+    el('video-recorder-section').style.display = 'none'
+    alert('Erro ao acessar câmera/microfone: ' + err.message)
+    return
+  }
+
+  // Conecta vídeo ao preview (sem exibir, só para capturar frame)
+  const videoEl = el('dep-video-preview')
+  videoEl.srcObject = _videoStream
+  await videoEl.play()
+
+  // Configura canvas
+  const canvas = el('dep-canvas')
+  canvas.width = 1280
+  canvas.height = 720
+
+  // Inicia loop de renderização do canvas
+  startCanvasLoop()
+
+  // Solicita GPS
+  requestGps()
+}
+
+function requestGps() {
+  set('gps-status-bar', '📍 Solicitando localização GPS…')
+  _videoGpsData.statusGps = 'solicitando'
+
+  if (!navigator.geolocation) {
+    _videoGpsData.statusGps = 'indisponível'
+    set('gps-status-bar', '📍 GPS indisponível neste dispositivo')
+    return
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    async pos => {
+      _videoGpsData.latitude = pos.coords.latitude
+      _videoGpsData.longitude = pos.coords.longitude
+      _videoGpsData.altitude = pos.coords.altitude
+      _videoGpsData.precisaoGps = pos.coords.accuracy
+      _videoGpsData.statusGps = 'obtido'
+      set('gps-status-bar', `📍 GPS obtido — Lat: ${pos.coords.latitude.toFixed(6)}, Lng: ${pos.coords.longitude.toFixed(6)} (±${Math.round(pos.coords.accuracy)}m) — Buscando endereço…`)
+      await reverseGeocode(pos.coords.latitude, pos.coords.longitude)
+    },
+    err => {
+      _videoGpsData.statusGps = 'erro: ' + err.message
+      set('gps-status-bar', `📍 GPS indisponível: ${err.message}`)
+    },
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  )
+}
+
+async function reverseGeocode(lat, lng) {
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&addressdetails=1`, {
+      headers: { 'Accept-Language': 'pt-BR' }
+    })
+    const data = await res.json()
+    const addr = data.address || {}
+    _videoGpsData.cep = addr.postcode || ''
+    _videoGpsData.bairro = addr.suburb || addr.neighbourhood || addr.city_district || ''
+    _videoGpsData.cidade = addr.city || addr.town || addr.municipality || ''
+    _videoGpsData.estado = addr.state || ''
+    _videoGpsData.endereco = data.display_name ? data.display_name.split(',').slice(0,3).join(',').trim() : ''
+    set('gps-status-bar', `📍 ${_videoGpsData.endereco || _videoGpsData.cidade + '/' + _videoGpsData.estado} — CEP: ${_videoGpsData.cep || 'não disponível'}`)
+  } catch(e) {
+    set('gps-status-bar', `📍 Lat: ${lat.toFixed(6)}, Lng: ${lng.toFixed(6)} (endereço não carregado)`)
   }
 }
 
-window.stopRecording = function() {
-  clearInterval(state.recordingTimer)
-  if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') state.mediaRecorder.stop()
-  el('rec-btns').innerHTML = `<button class="btn btn-primary btn-sm" onclick="startRecording()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>Iniciar Gravação</button><button class="btn btn-secondary btn-sm" onclick="el('audio-upload-input').click()">Upload de Áudio/Vídeo</button>`
-  el('rec-title').textContent = 'Novo Depoimento'
-  el('rec-timer').style.display = 'none'
-  el('rec-icon-wrap').innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="color:var(--text-muted)"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke="currentColor" stroke-width="1.5"/><path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="12" y1="19" x2="12" y2="23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="8" y1="23" x2="16" y2="23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`
-  const card = el('recorder-card'); if (card) { card.style.background = ''; card.style.borderColor = '' }
-  set('transcript-content', `<div style="text-align:center;padding:32px">${spinner('spinner-lg')}<div style="font-size:13px;color:var(--text-muted);margin-top:14px">Processando gravação…</div></div>`)
-  setTimeout(() => {
-    set('transcript-content', `<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Gravação processada</div><div style="font-size:13px;line-height:1.8;color:var(--text-secondary)">A gravação foi salva e enviada ao Firebase. Para transcrição automática, integre com Whisper API via Firebase Functions.</div>`)
-    el('transcript-actions').style.display = 'block'
-  }, 1500)
+function startCanvasLoop() {
+  const canvas = el('dep-canvas')
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  const videoEl = el('dep-video-preview')
+
+  function drawFrame() {
+    if (!canvas) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    // Desenha frame do vídeo
+    if (videoEl && videoEl.readyState >= 2) {
+      ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height)
+    } else {
+      ctx.fillStyle = '#1a1a1a'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+    }
+
+    drawWatermark(ctx, canvas.width, canvas.height)
+
+    _canvasAnimFrame = requestAnimationFrame(drawFrame)
+  }
+  drawFrame()
 }
 
-window.handleAudioUpload = function(e) {
-  const file = e.target.files[0]; if (!file) return
+function drawWatermark(ctx, W, H) {
+  const now = new Date()
+  const dateStr = now.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const nomePessoa = el('dep-nome')?.value || '—'
+  const tipo = el('dep-tipo')?.value || '—'
+  const processo = el('dep-processo')?.value || '—'
+  const gps = _videoGpsData
+
+  // Overlay escuro no rodapé
+  const overlayH = 160
+  ctx.fillStyle = 'rgba(0,0,0,0.72)'
+  ctx.fillRect(0, H - overlayH, W, overlayH)
+
+  ctx.textBaseline = 'top'
+
+  // Linha 1: Data/Hora
+  ctx.fillStyle = '#ffffff'
+  ctx.font = 'bold 20px monospace'
+  ctx.fillText(`${dateStr}  ${timeStr}`, 14, H - overlayH + 10)
+
+  // Linha 2: Nome + Tipo
+  ctx.font = 'bold 17px monospace'
+  ctx.fillStyle = '#ffe066'
+  ctx.fillText(`${nomePessoa}  |  ${tipo}`, 14, H - overlayH + 36)
+
+  // Linha 3: Processo
+  ctx.font = '14px monospace'
+  ctx.fillStyle = '#a0c4ff'
+  ctx.fillText(`Processo: ${processo}`, 14, H - overlayH + 60)
+
+  // Linha 4: GPS
+  const latStr = gps.latitude != null ? `Lat: ${gps.latitude.toFixed(6)}` : 'Lat: —'
+  const lngStr = gps.longitude != null ? `Lng: ${gps.longitude.toFixed(6)}` : 'Lng: —'
+  const altStr = gps.altitude != null ? `Alt: ${gps.altitude.toFixed(1)}m` : ''
+  const accStr = gps.precisaoGps != null ? `±${Math.round(gps.precisaoGps)}m` : ''
+  ctx.fillStyle = '#88ff88'
+  ctx.font = '13px monospace'
+  ctx.fillText(`${latStr}  ${lngStr}  ${altStr}  ${accStr}`.trim(), 14, H - overlayH + 82)
+
+  // Linha 5: Endereço
+  const endLine = [gps.endereco, gps.cep ? 'CEP ' + gps.cep : '', gps.cidade, gps.estado].filter(Boolean).join('  |  ')
+  ctx.fillStyle = '#cccccc'
+  ctx.font = '12px monospace'
+  const maxWidth = W - 28
+  let endTrunc = endLine
+  while (ctx.measureText(endTrunc).width > maxWidth && endTrunc.length > 10) {
+    endTrunc = endTrunc.slice(0, -4) + '…'
+  }
+  ctx.fillText(endTrunc || 'GPS: ' + gps.statusGps, 14, H - overlayH + 102)
+
+  // Linha 6: Status GPS
+  ctx.fillStyle = '#aaaaaa'
+  ctx.font = '11px monospace'
+  ctx.fillText(`GPS: ${gps.statusGps}`, 14, H - overlayH + 122)
+
+  // Marca d'água "LEXIS AI" no canto superior direito
+  ctx.save()
+  ctx.globalAlpha = 0.35
+  ctx.fillStyle = '#ffffff'
+  ctx.font = 'bold 15px monospace'
+  ctx.textAlign = 'right'
+  ctx.fillText('LEXIS AI — INSTRUÇÃO CONCENTRADA', W - 14, 14)
+  ctx.restore()
+  ctx.textAlign = 'left'
+}
+
+window.startVideoRecording = function() {
+  if (!_videoStream || !el('dep-canvas')) return
+
+  _videoChunks = []
+  _videoStartTime = new Date()
+
+  // Captura o stream do CANVAS (não da câmera diretamente)
+  const canvas = el('dep-canvas')
+  const canvasStream = canvas.captureStream(25)
+
+  // Adiciona faixas de áudio do stream original
+  const audioTracks = _videoStream.getAudioTracks()
+  audioTracks.forEach(t => canvasStream.addTrack(t))
+
+  // Tenta formatos suportados
+  const mimeTypes = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm']
+  let mimeType = ''
+  for (const m of mimeTypes) {
+    if (MediaRecorder.isTypeSupported(m)) { mimeType = m; break }
+  }
+
+  _videoMediaRecorder = new MediaRecorder(canvasStream, mimeType ? { mimeType } : {})
+  _videoMediaRecorder.ondataavailable = e => { if (e.data.size > 0) _videoChunks.push(e.data) }
+  _videoMediaRecorder.onstop = onVideoRecordingStop
+  _videoMediaRecorder.start(1000)
+
+  // Timer
+  state.recordingElapsed = 0
+  clearInterval(state.recordingTimer)
+  state.recordingTimer = setInterval(() => {
+    state.recordingElapsed++
+    const t = el('rec-timer'); if (t) t.textContent = formatTime(state.recordingElapsed)
+  }, 1000)
+
+  el('rec-timer').style.display = 'block'
+  el('rec-title').textContent = '● Gravando…'
+  el('rec-icon-wrap').innerHTML = '<div class="record-dot"></div>'
+  el('rec-btns').innerHTML = `
+    <button class="btn btn-danger" onclick="stopVideoRecording()">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="18" height="18" rx="2" fill="currentColor"/></svg>
+      Finalizar Gravação
+    </button>`
+}
+
+window.stopVideoRecording = function() {
+  clearInterval(state.recordingTimer)
+  if (_videoMediaRecorder && _videoMediaRecorder.state !== 'inactive') {
+    _videoMediaRecorder.stop()
+  }
+  el('rec-btns').innerHTML = `<div style="font-size:13px;color:var(--text-muted)">${spinner()} Processando gravação…</div>`
+  el('rec-title').textContent = 'Processando…'
+  el('rec-timer').style.display = 'none'
+}
+
+async function onVideoRecordingStop() {
+  const dataFim = new Date()
+  const blob = new Blob(_videoChunks, { type: 'video/webm' })
+  const duracao = formatTime(state.recordingElapsed)
+
   const c = state.selectedCase
   const meta = {
-    name: `Upload — ${file.name}`,
-    date: new Date().toLocaleDateString('pt-BR'),
-    duration: '—',
-    status: 'transcribed',
-    caseId: c?.id,
+    nomePessoa: el('dep-nome')?.value?.trim() || '—',
+    tipoDepoimento: el('dep-tipo')?.value || '—',
+    numeroProcesso: el('dep-processo')?.value?.trim() || c?.number || '',
+    advogado: el('dep-advogado')?.value?.trim() || state.currentUser?.name || '',
+    dataInicio: _videoStartTime?.toISOString() || new Date().toISOString(),
+    dataFim: dataFim.toISOString(),
+    duracao,
+    ..._videoGpsData,
   }
-  const rec = { id: `rec_${Date.now()}`, ...meta, url: URL.createObjectURL(file), blob: file }
-  state.recordings.unshift(rec)
-  renderRecordingsList(state.recordings)
-  const cnt = el('rec-count'); if (cnt) { cnt.textContent = state.recordings.length; cnt.style.display = 'inline-flex' }
 
+  // Para o loop do canvas e a câmera
+  cancelAnimationFrame(_canvasAnimFrame)
+  _videoStream?.getTracks().forEach(t => t.stop())
+  _videoStream = null
+
+  // Cria URL local para preview imediato
+  const localRec = {
+    id: `rec_${Date.now()}`,
+    nomePessoa: meta.nomePessoa,
+    tipoDepoimento: meta.tipoDepoimento,
+    duracao,
+    cidade: meta.cidade,
+    estado: meta.estado,
+    criadoEm: new Date().toISOString(),
+    videoUrl: URL.createObjectURL(blob),
+    _blob: blob,
+    _local: true,
+  }
+  state.recordings.unshift(localRec)
+  renderRecordingsList(state.recordings)
+  const cnt = el('rec-count')
+  if (cnt) { cnt.textContent = state.recordings.length; cnt.style.display = 'inline-flex' }
+
+  // Volta UI ao formulário
+  el('video-recorder-section').style.display = 'none'
+  el('video-form-card').style.display = 'block'
+  el('rec-title') && (el('rec-title').textContent = 'Câmera Pronta')
+
+  // Upload ao Firebase
   if (c && state.fbStorage) {
     const progEl = el('ffmpeg-progress')
     if (progEl) progEl.style.display = 'block'
-    // Usa FFmpeg para converter antes de enviar
-    const blobToUpload = file
-    uploadRecordingToFirebase(c.id, blobToUpload, meta, ({ stage, pct }) => {
-      if (progEl) {
-        progEl.querySelector('.progress-fill').style.width = pct + '%'
-        el('ffmpeg-progress-label').textContent = `${stage} (${pct}%)`
+
+    uploadVideoToFirebase(c.id, blob, meta, ({ stage, pct }) => {
+      const fill = el('ffmpeg-progress')?.querySelector('.progress-fill')
+      if (fill) fill.style.width = pct + '%'
+      const lbl = el('ffmpeg-progress-label')
+      if (lbl) lbl.textContent = `${stage} (${pct}%)`
+    }).then(saved => {
+      if (progEl) progEl.style.display = 'none'
+      // Atualiza rec local com URL do Firebase
+      const idx = state.recordings.findIndex(r => r.id === localRec.id)
+      if (idx >= 0) {
+        state.recordings[idx] = { ...state.recordings[idx], ...saved, _local: false }
+        renderRecordingsList(state.recordings)
       }
-    }).then(() => {
-      if (progEl) progEl.style.display = 'none'
     }).catch(err => {
-      console.warn('[Upload arquivo]', err.message)
+      console.warn('[Upload vídeo]', err.message)
       if (progEl) progEl.style.display = 'none'
+      const lbl = el('ffmpeg-progress-label')
+      if (lbl) { lbl.style.color = 'var(--risk-high)'; lbl.textContent = '✗ Erro no upload: ' + err.message }
     })
   }
 }
 
-function renderRecordingsList(recs) {
-  if (!recs || !recs.length) {
-    set('recordings-list', '<div class="empty-state"><div class="empty-icon">🎙️</div><div class="empty-desc">Nenhum depoimento gravado ainda.</div></div>')
-    return
-  }
-  set('recordings-list', recs.map(v => `
-    <div style="padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;cursor:pointer" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''" onclick="selectRecording('${v.id}')">
-      <div style="font-size:20px">🎙️</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.name}</div>
-        <div style="font-size:11px;color:var(--text-muted)">${v.date} · ${v.duration}${v.storagePath ? ' · Firebase ✓' : ''}</div>
-      </div>
-      ${statusBadge(v.status || 'transcribed')}
-      ${v.url ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();downloadRec('${v.id}')">⬇</button>` : ''}
-    </div>
-  `).join(''))
+window.cancelVideoRecorder = function() {
+  cancelAnimationFrame(_canvasAnimFrame)
+  clearInterval(state.recordingTimer)
+  _videoStream?.getTracks().forEach(t => t.stop())
+  _videoStream = null
+  if (_videoMediaRecorder && _videoMediaRecorder.state !== 'inactive') _videoMediaRecorder.stop()
+  el('video-recorder-section').style.display = 'none'
+  el('video-form-card').style.display = 'block'
 }
 
-window.selectRecording = function(id) {
+// Mantém compatibilidade com chamadas do hearing mode
+window.startRecording = window.initVideoRecorder
+window.stopRecording = window.stopVideoRecording
+
+function renderRecordingsList(recs) {
+  if (!recs || !recs.length) {
+    set('recordings-list', '<div class="empty-state"><div class="empty-icon">🎥</div><div class="empty-desc">Nenhum depoimento gravado ainda.</div></div>')
+    return
+  }
+  set('recordings-list', recs.map(v => {
+    const data = v.criadoEm
+      ? (v.criadoEm.toDate ? v.criadoEm.toDate().toLocaleString('pt-BR') : new Date(v.criadoEm).toLocaleString('pt-BR'))
+      : (v.date || '—')
+    const local = v._local ? `<span class="badge badge-gold" style="font-size:10px">local</span>` : `<span class="badge badge-blue" style="font-size:10px">Firebase ✓</span>`
+    const cidadeUF = [v.cidade, v.estado].filter(Boolean).join('/')
+    return `
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:14px" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''">
+      <div style="font-size:22px;margin-top:2px">🎥</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;margin-bottom:2px">${v.nomePessoa || v.name || '—'}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">${v.tipoDepoimento || '—'} · ${data} · ${v.duracao || '—'}${cidadeUF ? ' · ' + cidadeUF : ''}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${local}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap">
+        ${(v.videoUrl || v.url) ? `<button class="btn btn-primary btn-sm" onclick="watchRecording('${v.id}')">▶ Assistir</button>` : ''}
+        ${(v.videoUrl || v.url) ? `<button class="btn btn-ghost btn-sm" onclick="downloadRec('${v.id}')">⬇ Baixar</button>` : ''}
+        <button class="btn btn-secondary btn-sm" onclick="generateRecReport('${v.id}')">📄 Relatório</button>
+      </div>
+    </div>`
+  }).join(''))
+}
+
+window.watchRecording = function(id) {
   const rec = state.recordings.find(r => r.id === id); if (!rec) return
-  set('transcript-content', `
-    <div style="margin-bottom:14px">
-      <div style="font-size:13px;font-weight:500;margin-bottom:8px">${rec.name}</div>
-      <div style="display:flex;gap:8px">${statusBadge(rec.status || 'transcribed')}<span class="badge badge-neutral">${rec.duration}</span></div>
-      ${rec.url ? `<audio controls src="${rec.url}" style="width:100%;margin-top:12px;height:36px"></audio>` : ''}
-    </div>
-    <div style="font-size:13px;line-height:1.8;color:var(--text-secondary)">Para transcrição automática, integre com Whisper API via Firebase Functions após o upload.</div>
-  `)
-  el('transcript-actions').style.display = 'block'
+  const url = rec.videoUrl || rec.url
+  if (!url) return
+  // Abre em nova aba ou modal
+  const w = window.open('', '_blank', 'width=900,height=600')
+  if (w) {
+    w.document.write(`<!DOCTYPE html><html><head><title>${rec.nomePessoa || 'Depoimento'}</title><style>body{margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh}video{max-width:100%;max-height:100vh}</style></head><body><video src="${url}" controls autoplay style="width:100%"></video></body></html>`)
+  }
 }
 
 window.downloadRec = function(id) {
-  const rec = state.recordings.find(r => r.id === id); if (!rec || !rec.url) return
-  const a = document.createElement('a'); a.href = rec.url; a.download = rec.name.replace(/\s+/g,'_') + '.webm'; a.click()
+  const rec = state.recordings.find(r => r.id === id); if (!rec) return
+  const url = rec.videoUrl || rec.url; if (!url) return
+  const a = document.createElement('a')
+  a.href = url
+  a.download = rec.nomeArquivo || ((rec.nomePessoa || 'depoimento').replace(/\s+/g,'_') + '.webm')
+  a.click()
 }
 
-window.exportTranscript = function() {
-  const c = state.selectedCase
-  const content = `TRANSCRIÇÃO — ${c?.title || 'Sem caso'}\nData: ${new Date().toLocaleDateString('pt-BR')}\n\nTranscrição automática disponível após integração com Whisper API via Firebase Functions.`
-  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([content], { type: 'text/plain' })); a.download = `transcricao_${(c?.title || 'depoimento').replace(/\s+/g,'_')}.txt`; a.click()
+window.generateRecReport = function(id) {
+  const rec = state.recordings.find(r => r.id === id)
+  if (!rec) return
+  const lines = [
+    'RELATÓRIO DE DEPOIMENTO — INSTRUÇÃO CONCENTRADA',
+    '═══════════════════════════════════════════════',
+    `Pessoa:          ${rec.nomePessoa || '—'}`,
+    `Tipo:            ${rec.tipoDepoimento || '—'}`,
+    `Processo:        ${rec.numeroProcesso || '—'}`,
+    `Advogado:        ${rec.advogado || '—'}`,
+    `Data/Hora Início: ${rec.dataInicio ? new Date(rec.dataInicio).toLocaleString('pt-BR') : '—'}`,
+    `Data/Hora Fim:    ${rec.dataFim ? new Date(rec.dataFim).toLocaleString('pt-BR') : '—'}`,
+    `Duração:         ${rec.duracao || '—'}`,
+    '───────────────────────────────────────────────',
+    'LOCALIZAÇÃO GPS',
+    `Latitude:        ${rec.latitude ?? '—'}`,
+    `Longitude:       ${rec.longitude ?? '—'}`,
+    `Altitude:        ${rec.altitude != null ? rec.altitude + 'm' : '—'}`,
+    `Precisão GPS:    ${rec.precisaoGps != null ? '±' + Math.round(rec.precisaoGps) + 'm' : '—'}`,
+    `CEP:             ${rec.cep || '—'}`,
+    `Bairro:          ${rec.bairro || '—'}`,
+    `Cidade/UF:       ${[rec.cidade, rec.estado].filter(Boolean).join('/') || '—'}`,
+    `Endereço:        ${rec.endereco || '—'}`,
+    `Status GPS:      ${rec.statusGps || '—'}`,
+    '───────────────────────────────────────────────',
+    `Arquivo:         ${rec.nomeArquivo || '—'}`,
+    `URL Firebase:    ${rec.videoUrl || '—'}`,
+    `Tamanho:         ${rec.size || '—'}`,
+  ]
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/plain' }))
+  a.download = `relatorio_${(rec.nomePessoa || 'dep').replace(/\s+/g,'_')}.txt`
+  a.click()
 }
 
 function formatTime(s) {

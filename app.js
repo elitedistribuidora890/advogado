@@ -1893,11 +1893,15 @@ function renderVideo() {
             <canvas id="dep-canvas" style="width:auto;height:420px;max-width:100%;display:block;object-fit:contain"></canvas>
             <video id="dep-video-preview" autoplay muted playsinline style="display:none"></video>
           </div>
-
+          
           <div style="display:flex;gap:10px;flex-wrap:wrap" id="rec-btns">
             <button class="btn btn-primary" onclick="startVideoRecording()">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg>
               Gravar
+            </button>
+            <button class="btn btn-ghost btn-sm" id="flip-camera-btn" title="Câmera traseira" onclick="flipCamera()" style="display:flex;align-items:center;gap:6px">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 7h-3.5l-1.5-2H9L7.5 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 17a3 3 0 1 0 0-6 3 3 0 0 0 0 6z" stroke="currentColor" stroke-width="1.5"/><path d="M16 5l2-2 2 2M18 3v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Girar
             </button>
             <button class="btn btn-ghost btn-sm" onclick="cancelVideoRecorder()">Cancelar</button>
           </div>
@@ -1948,6 +1952,7 @@ let _videoGpsData = {
 let _videoStream = null
 let _canvasAnimFrame = null
 let _videoMediaRecorder = null
+let _videoFacingMode = 'user' // 'user' = frontal | 'environment' = traseira
 let _videoChunks = []
 let _videoStartTime = null
 
@@ -1960,9 +1965,10 @@ window.initVideoRecorder = async function() {
   el('video-recorder-section').style.display = 'block'
 
   // Solicita câmera + microfone — portrait (celular 9:16)
+  _videoFacingMode = 'user'
   try {
     _videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: 'user', aspectRatio: { ideal: 9/16 } },
+      video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: _videoFacingMode, aspectRatio: { ideal: 9/16 } },
       audio: true
     })
   } catch (err) {
@@ -1992,6 +1998,42 @@ window.initVideoRecorder = async function() {
 
   // Solicita GPS
   requestGps()
+}
+
+// ─── GIRAR CÂMERA (frente ↔ traseira) ────────────────────────────
+
+window.flipCamera = async function() {
+  if (_videoMediaRecorder && _videoMediaRecorder.state === 'recording') return // não gira durante gravação
+
+  // Para tracks atuais
+  _videoStream?.getTracks().forEach(t => t.stop())
+
+  // Alterna modo
+  _videoFacingMode = _videoFacingMode === 'user' ? 'environment' : 'user'
+
+  try {
+    _videoStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: _videoFacingMode, aspectRatio: { ideal: 9/16 } },
+      audio: true
+    })
+  } catch {
+    try {
+      _videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: _videoFacingMode }, audio: true })
+    } catch (e) {
+      // Reverte se falhar
+      _videoFacingMode = _videoFacingMode === 'user' ? 'environment' : 'user'
+      _videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: _videoFacingMode }, audio: true }).catch(() => null)
+      if (!_videoStream) return
+    }
+  }
+
+  const videoEl = el('dep-video-preview')
+  videoEl.srcObject = _videoStream
+  await videoEl.play()
+
+  // Atualiza ícone do botão
+  const btn = el('flip-camera-btn')
+  if (btn) btn.title = _videoFacingMode === 'user' ? 'Câmera traseira' : 'Câmera frontal'
 }
 
 function requestGps() {

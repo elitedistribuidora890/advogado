@@ -1889,9 +1889,9 @@ function renderVideo() {
           </div>
 
           <!-- Canvas com overlay — é o que será gravado — portrait 9:16 -->
-          <!-- Preview ao vivo via <video> (sem distorção) — canvas oculto só para gravação -->
-          <div id="camera-preview-wrap" style="display:flex;justify-content:center;align-items:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px;min-height:240px;max-height:520px">
+          <div id="camera-preview-wrap" style="display:flex;justify-content:center;align-items:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px;min-height:240px;max-height:520px;position:relative;cursor:crosshair" onclick="tapToFocus(event)">
             <video id="dep-video-preview" autoplay muted playsinline style="width:100%;height:100%;max-height:520px;object-fit:contain;display:block"></video>
+            <div id="focus-ring" style="display:none;position:absolute;width:56px;height:56px;border:2px solid #ffe066;border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.5);transition:opacity 0.3s"></div>
           </div>
           <canvas id="dep-canvas" style="display:none"></canvas>
           
@@ -2072,7 +2072,77 @@ window.flipCamera = async function() {
   if (btn) btn.title = _videoFacingMode === 'user' ? 'Câmera traseira' : 'Câmera frontal'
 }
 
-function requestGps() {
+// ─── TOQUE PARA FOCAR ────────────────────────────────────────────
+
+let _focusRingTimeout = null
+
+window.tapToFocus = async function(event) {
+  const wrap = el('camera-preview-wrap')
+  const ring = el('focus-ring')
+  if (!wrap || !ring) return
+
+  // Posiciona o anel de foco no ponto tocado
+  const rect = wrap.getBoundingClientRect()
+  const x = event.clientX - rect.left
+  const y = event.clientY - rect.top
+  ring.style.left = (x - 28) + 'px'
+  ring.style.top  = (y - 28) + 'px'
+  ring.style.display = 'block'
+  ring.style.opacity = '1'
+  ring.style.transform = 'scale(1.2)'
+  ring.style.transition = 'transform 0.15s ease, opacity 0.3s ease'
+
+  // Anima contração do anel
+  setTimeout(() => { ring.style.transform = 'scale(1)' }, 150)
+
+  // Esconde o anel após 1.5s
+  clearTimeout(_focusRingTimeout)
+  _focusRingTimeout = setTimeout(() => {
+    ring.style.opacity = '0'
+    setTimeout(() => { ring.style.display = 'none' }, 300)
+  }, 1500)
+
+  // Tenta foco via API de câmera (funciona em celular/alguns navegadores)
+  if (!_videoStream) return
+  const [track] = _videoStream.getVideoTracks()
+  if (!track) return
+
+  const caps = track.getCapabilities?.() || {}
+  if (!caps.focusMode) return // dispositivo não suporta foco manual
+
+  // Calcula ponto normalizado (0–1) relativo ao vídeo real dentro do wrapper
+  const videoEl = el('dep-video-preview')
+  const vRatio = videoEl ? (videoEl.videoWidth / videoEl.videoHeight) : 1
+  const wRatio = rect.width / rect.height
+  let normX, normY
+
+  if (vRatio > wRatio) {
+    // vídeo tem barras em cima/baixo (letterbox vertical)
+    const scaledH = rect.width / vRatio
+    const offsetY = (rect.height - scaledH) / 2
+    normX = x / rect.width
+    normY = (y - offsetY) / scaledH
+  } else {
+    // vídeo tem barras nas laterais (pillarbox horizontal)
+    const scaledW = rect.height * vRatio
+    const offsetX = (rect.width - scaledW) / 2
+    normX = (x - offsetX) / scaledW
+    normY = y / rect.height
+  }
+
+  normX = Math.max(0, Math.min(1, normX))
+  normY = Math.max(0, Math.min(1, normY))
+
+  try {
+    const constraints = { advanced: [{ focusMode: 'manual', focusDistance: undefined }] }
+    if (caps.pointsOfInterest) {
+      constraints.advanced = [{ pointsOfInterest: [{ x: normX, y: normY }], focusMode: 'manual' }]
+    }
+    await track.applyConstraints(constraints)
+  } catch {
+    // Silencia — dispositivo pode não suportar foco manual pontual
+  }
+}
   set('gps-status-bar', '📍 Solicitando localização GPS…')
   _videoGpsData.statusGps = 'solicitando'
 

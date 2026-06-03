@@ -1891,10 +1891,12 @@ function renderVideo() {
             📍 Aguardando GPS…
           </div>
 
-          <!-- Canvas com overlay — é o que será gravado — portrait 9:16 -->
+          <!-- Canvas com overlay — é o que será gravado -->
           <div id="camera-preview-wrap" style="display:flex;justify-content:center;align-items:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px;min-height:240px;max-height:520px;position:relative;cursor:crosshair" onclick="tapToFocus(event)">
-            <video id="dep-video-preview" autoplay muted playsinline style="width:100%;height:100%;max-height:520px;object-fit:contain;display:block"></video>
-            <canvas id="dep-canvas" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none"></canvas>
+            <!-- Vídeo da câmera (oculto — apenas fonte para o canvas) -->
+            <video id="dep-video-preview" autoplay muted playsinline style="display:none;position:absolute"></video>
+            <!-- Canvas com overlay de dados — é o preview real e o que é gravado -->
+            <canvas id="dep-canvas" style="width:100%;height:100%;max-height:520px;object-fit:contain;display:block"></canvas>
             <div id="focus-ring" style="display:none;position:absolute;width:56px;height:56px;border:2px solid #ffe066;border-radius:50%;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,0.5);transition:opacity 0.3s"></div>
           </div>
           
@@ -2202,27 +2204,21 @@ function startCanvasLoop() {
   function drawFrame() {
     if (!canvas) return
 
-    // Sincroniza tamanho do canvas com o vídeo real (para gravar com proporção correta)
-    if (videoEl && videoEl.videoWidth > 0) {
+    if (videoEl && videoEl.readyState >= 2) {
       const vw = videoEl.videoWidth
       const vh = videoEl.videoHeight
-      if (canvas.width !== vw || canvas.height !== vh) {
-        canvas.width = vw
-        canvas.height = vh
+      if (vw > 0 && vh > 0) {
+        if (canvas.width !== vw || canvas.height !== vh) {
+          canvas.width = vw
+          canvas.height = vh
+        }
+        ctx.drawImage(videoEl, 0, 0, vw, vh)
       }
+    } else {
+      ctx.fillStyle = '#1a1a1a'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
     }
 
-    // Limpa completamente (fundo transparente no preview)
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-
-    // Durante gravação: desenha o frame do vídeo para o MediaRecorder capturar
-    if (_videoMediaRecorder && _videoMediaRecorder.state === 'recording') {
-      if (videoEl && videoEl.readyState >= 2 && canvas.width > 0) {
-        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height)
-      }
-    }
-
-    // Sempre desenha as informações por cima
     drawWatermark(ctx, canvas.width, canvas.height)
 
     _canvasAnimFrame = requestAnimationFrame(drawFrame)
@@ -2520,13 +2516,6 @@ window.saveRecToFirebase = async function(localId) {
   if (!c) { alert('Selecione um caso antes de salvar.'); return }
   if (!state.fbStorage) { alert('Firebase Storage não configurado.'); return }
 
-  // Verifica se usuário está autenticado no Firebase Auth
-  const authUser = state.fbAuth?.currentUser
-  if (!authUser) {
-    alert('Sessão expirada. Faça login novamente.')
-    return
-  }
-
   // Desabilita botão e mostra progresso
   const btn = el(`save-fb-btn-${localId}`)
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando…' }
@@ -2567,7 +2556,7 @@ window.saveRecToFirebase = async function(localId) {
       snap.forEach(d => updateDoc(d.ref, { analise: rec.analise }).catch(() => {}))
     }
 
-    if (progressLabel) progressLabel.textContent = '✓ Salvo no Firebase com relatório IA!'
+    if (progressLabel) progressLabel.textContent = '✓ Salvo no banco de dados com relatório IA!'
 
     // Atualiza o registro local para refletir que foi salvo
     const idx = state.recordings.findIndex(r => r.id === localId)
@@ -2580,15 +2569,8 @@ window.saveRecToFirebase = async function(localId) {
 
   } catch (err) {
     console.warn('[Salvar Firebase]', err.message)
-    let msg = err.message
-    if (err.message?.includes('unauthorized') || err.message?.includes('permission')) {
-      msg = 'Sem permissão no Firebase Storage. Corrija as regras no console do Firebase:\n\nStorage → Rules → cole:\nrules_version = \'2\';\nservice firebase.storage {\n  match /b/{bucket}/o {\n    match /{allPaths=**} {\n      allow read, write: if request.auth != null;\n    }\n  }\n}'
-    }
     if (progressLabel) { progressLabel.style.color = 'var(--risk-high)'; progressLabel.textContent = '✗ Erro: ' + err.message }
-    if (err.message?.includes('unauthorized') || err.message?.includes('permission')) {
-      alert(msg)
-    }
-    if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" stroke-width="1.5"/><polyline points="17 21 17 13 7 13 7 21" stroke="currentColor" stroke-width="1.5"/><polyline points="7 3 7 8 15 8" stroke="currentColor" stroke-width="1.5"/></svg> Salvar Firebase' }
+    if (btn) { btn.disabled = false; btn.textContent = 'Salvar Firebase' }
   }
 }
 
@@ -2701,13 +2683,13 @@ function renderRecordingsList(recs) {
           ${transcPreview}
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
-          ${(v.videoUrl || v.url) ? `<button class="btn btn-primary btn-sm" onclick="watchRecording('${v.id}')">▶ Assistir</button>` : ''}
-          ${(v.videoUrl || v.url) ? `<button class="btn btn-ghost btn-sm" onclick="downloadRec('${v.id}')">⬇ Baixar</button>` : ''}
+          ${(v.videoUrl || v.url || v._blob) ? `<button class="btn btn-primary btn-sm" onclick="watchRecording('${v.id}')">▶ Assistir</button>` : ''}
+          ${(v.videoUrl || v.url || v._blob) ? `<button class="btn btn-ghost btn-sm" onclick="downloadRec('${v.id}')">⬇ Baixar</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="generateRecReport('${v.id}')" ${v._analisando ? 'disabled' : ''}>📄 Relatório</button>
           ${v.analise && !v.analise.erro ? `<button class="btn btn-ghost btn-sm" onclick="viewAiAnalysis('${v.id}')">🔍 Ver IA</button>` : ''}
           ${v._local && !v._analisando && v._blob ? `<button class="btn btn-primary btn-sm" id="save-fb-btn-${v.id}" onclick="saveRecToFirebase('${v.id}')" style="background:var(--accent-teal);border-color:var(--accent-teal)">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" stroke-width="1.5"/><polyline points="17 21 17 13 7 13 7 21" stroke="currentColor" stroke-width="1.5"/><polyline points="7 3 7 8 15 8" stroke="currentColor" stroke-width="1.5"/></svg>
-            Salvar Firebase
+            Salvar Video
           </button>` : ''}
         </div>
       </div>
@@ -2757,22 +2739,75 @@ window.viewAiAnalysis = function(id) {
 
 window.watchRecording = function(id) {
   const rec = state.recordings.find(r => r.id === id); if (!rec) return
-  const url = rec.videoUrl || rec.url
-  if (!url) return
-  // Abre em nova aba ou modal
-  const w = window.open('', '_blank', 'width=900,height=600')
-  if (w) {
-    w.document.write(`<!DOCTYPE html><html><head><title>${rec.nomePessoa || 'Depoimento'}</title><style>body{margin:0;background:#000;display:flex;align-items:center;justify-content:center;min-height:100vh}video{max-width:100%;max-height:100vh}</style></head><body><video src="${url}" controls autoplay style="width:100%"></video></body></html>`)
-  }
+  const url = rec.videoUrl || rec.url || (rec._blob ? URL.createObjectURL(rec._blob) : null)
+  if (!url) { alert('URL do vídeo não disponível.'); return }
+
+  // Remove modal anterior se existir
+  const existing = document.getElementById('video-watch-modal')
+  if (existing) existing.remove()
+
+  const name = rec.nomePessoa || 'Depoimento'
+  const modal = document.createElement('div')
+  modal.id = 'video-watch-modal'
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px'
+  modal.innerHTML = `
+    <div style="width:100%;max-width:860px;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="color:#fff;font-size:14px;font-weight:600;opacity:0.9">▶ ${name} — ${rec.tipoDepoimento || ''}</div>
+        <button onclick="document.getElementById('video-watch-modal').remove()" style="background:rgba(255,255,255,0.12);border:none;color:#fff;width:34px;height:34px;border-radius:50%;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center">✕</button>
+      </div>
+      <video
+        src="${url}"
+        controls
+        autoplay
+        playsinline
+        style="width:100%;max-height:70vh;border-radius:8px;background:#000;outline:none"
+        controlsList="nodownload"
+      ></video>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost btn-sm" onclick="downloadRec('${id}')" style="color:#fff;border-color:rgba(255,255,255,0.2)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><polyline points="7 10 12 15 17 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><line x1="12" y1="15" x2="12" y2="3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Baixar Vídeo
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('video-watch-modal').remove()" style="color:#fff;border-color:rgba(255,255,255,0.2)">Fechar</button>
+      </div>
+    </div>`
+
+  // Fecha ao clicar fora do vídeo
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove() })
+  document.body.appendChild(modal)
 }
 
-window.downloadRec = function(id) {
+window.downloadRec = async function(id) {
   const rec = state.recordings.find(r => r.id === id); if (!rec) return
-  const url = rec.videoUrl || rec.url; if (!url) return
-  const a = document.createElement('a')
-  a.href = url
-  a.download = rec.nomeArquivo || ((rec.nomePessoa || 'depoimento').replace(/\s+/g,'_') + '.webm')
-  a.click()
+  const fileName = rec.nomeArquivo || ((rec.nomePessoa || 'depoimento').replace(/\s+/g,'_') + '.mp4')
+
+  // Vídeo local (Blob em memória) — download direto
+  if (rec._blob) {
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(rec._blob)
+    a.download = fileName
+    a.click()
+    return
+  }
+
+  const url = rec.videoUrl || rec.url
+  if (!url) { alert('URL do vídeo não disponível.'); return }
+
+  // Tenta fetch para forçar download (contorna bloqueio CORS do Firebase)
+  try {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = fileName
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000)
+  } catch {
+    // Fallback: abre em nova aba para o usuário baixar manualmente
+    window.open(url, '_blank')
+  }
 }
 
 window.generateRecReport = function(id) {

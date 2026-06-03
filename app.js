@@ -1889,10 +1889,11 @@ function renderVideo() {
           </div>
 
           <!-- Canvas com overlay — é o que será gravado — portrait 9:16 -->
-          <div style="display:flex;justify-content:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px">
-            <canvas id="dep-canvas" style="width:100%;max-height:480px;display:block;object-fit:contain;border-radius:4px"></canvas>
-            <video id="dep-video-preview" autoplay muted playsinline style="display:none"></video>
+          <!-- Preview ao vivo via <video> (sem distorção) — canvas oculto só para gravação -->
+          <div id="camera-preview-wrap" style="display:flex;justify-content:center;align-items:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px;min-height:240px;max-height:520px">
+            <video id="dep-video-preview" autoplay muted playsinline style="width:100%;height:100%;max-height:520px;object-fit:contain;display:block"></video>
           </div>
+          <canvas id="dep-canvas" style="display:none"></canvas>
           
           <div style="display:flex;gap:10px;flex-wrap:wrap" id="rec-btns">
             <button class="btn btn-primary" onclick="startVideoRecording()">
@@ -1994,12 +1995,20 @@ window.initVideoRecorder = async function() {
     setTimeout(resolve, 1500) // fallback
   })
 
-  // Ajusta canvas para o aspecto real da câmera (sem distorção)
+  // Ajusta canvas para o aspecto real da câmera (para gravação)
   const canvas = el('dep-canvas')
   const vw = videoEl.videoWidth || 1280
   const vh = videoEl.videoHeight || 720
   canvas.width = vw
   canvas.height = vh
+
+  // Ajusta altura do preview wrapper ao aspecto real (portrait ou landscape)
+  const wrap = el('camera-preview-wrap')
+  if (wrap) {
+    const isPortrait = vh > vw
+    wrap.style.maxHeight = isPortrait ? '520px' : '360px'
+    wrap.style.minHeight = isPortrait ? '300px' : '200px'
+  }
 
   // Inicia loop de renderização do canvas
   startCanvasLoop()
@@ -2049,6 +2058,13 @@ window.flipCamera = async function() {
   if (canvas && videoEl.videoWidth > 0) {
     canvas.width = videoEl.videoWidth
     canvas.height = videoEl.videoHeight
+  }
+  // Reajusta preview wrapper
+  const wrap = el('camera-preview-wrap')
+  if (wrap && videoEl.videoHeight > 0) {
+    const isPortrait = videoEl.videoHeight > videoEl.videoWidth
+    wrap.style.maxHeight = isPortrait ? '520px' : '360px'
+    wrap.style.minHeight = isPortrait ? '300px' : '200px'
   }
 
   // Atualiza ícone do botão
@@ -2110,14 +2126,11 @@ function startCanvasLoop() {
 
   function drawFrame() {
     if (!canvas) return
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
 
     if (videoEl && videoEl.readyState >= 2) {
-      // Desenha mantendo o aspecto real do vídeo (sem distorção)
       const vw = videoEl.videoWidth
       const vh = videoEl.videoHeight
       if (vw > 0 && vh > 0) {
-        // Se o canvas ficou com tamanho diferente do vídeo (ex: após flip), reajusta
         if (canvas.width !== vw || canvas.height !== vh) {
           canvas.width = vw
           canvas.height = vh
@@ -2210,7 +2223,19 @@ function drawWatermark(ctx, W, H) {
   ctx.font = '12px monospace'
   ctx.fillText(`GPS: ${gps.statusGps}`, PAD, y)
 
-  
+  // Marca d'água "LEXIS AI" no canto superior direito
+  ctx.save()
+  setShadow(ctx)
+  ctx.globalAlpha = 0.85
+  ctx.fillStyle = '#ffffff'
+  ctx.font = 'bold 17px monospace'
+  ctx.textAlign = 'right'
+  ctx.fillText('LEXIS AI', W - PAD, PAD)
+  ctx.font = '13px monospace'
+  ctx.fillText('INSTRUÇÃO CONCENTRADA', W - PAD, PAD + 22)
+  ctx.restore()
+  clearShadow(ctx)
+  ctx.textAlign = 'left'
 }
 
 window.startVideoRecording = function() {

@@ -1888,9 +1888,9 @@ function renderVideo() {
             📍 Aguardando GPS…
           </div>
 
-          <!-- Canvas com overlay — é o que será gravado -->
-          <div style="position:relative;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px">
-            <canvas id="dep-canvas" style="width:100%;display:block;max-height:400px;object-fit:contain"></canvas>
+          <!-- Canvas com overlay — é o que será gravado — portrait 9:16 -->
+          <div style="display:flex;justify-content:center;background:#000;border-radius:var(--radius-sm);overflow:hidden;margin-bottom:14px">
+            <canvas id="dep-canvas" style="width:auto;height:420px;max-width:100%;display:block;object-fit:contain"></canvas>
             <video id="dep-video-preview" autoplay muted playsinline style="display:none"></video>
           </div>
 
@@ -1959,17 +1959,22 @@ window.initVideoRecorder = async function() {
   el('video-form-card').style.display = 'none'
   el('video-recorder-section').style.display = 'block'
 
-  // Solicita câmera + microfone
+  // Solicita câmera + microfone — portrait (celular 9:16)
   try {
     _videoStream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      video: { width: { ideal: 720 }, height: { ideal: 1280 }, facingMode: 'user', aspectRatio: { ideal: 9/16 } },
       audio: true
     })
   } catch (err) {
-    el('video-form-card').style.display = 'block'
-    el('video-recorder-section').style.display = 'none'
-    alert('Erro ao acessar câmera/microfone: ' + err.message)
-    return
+    // Fallback sem restrição de proporção
+    try {
+      _videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    } catch (err2) {
+      el('video-form-card').style.display = 'block'
+      el('video-recorder-section').style.display = 'none'
+      alert('Erro ao acessar câmera/microfone: ' + err2.message)
+      return
+    }
   }
 
   // Conecta vídeo ao preview (sem exibir, só para capturar frame)
@@ -1977,10 +1982,10 @@ window.initVideoRecorder = async function() {
   videoEl.srcObject = _videoStream
   await videoEl.play()
 
-  // Configura canvas
+  // Configura canvas portrait 9:16
   const canvas = el('dep-canvas')
-  canvas.width = 1280
-  canvas.height = 720
+  canvas.width = 720
+  canvas.height = 1280
 
   // Inicia loop de renderização do canvas
   startCanvasLoop()
@@ -2069,60 +2074,66 @@ function drawWatermark(ctx, W, H) {
   const processo = el('dep-processo')?.value || '—'
   const gps = _videoGpsData
 
-  // Overlay escuro no rodapé
-  const overlayH = 160
-  ctx.fillStyle = 'rgba(0,0,0,0.72)'
+  // Overlay escuro no rodapé — mais alto em portrait
+  const overlayH = 220
+  ctx.fillStyle = 'rgba(0,0,0,0.78)'
   ctx.fillRect(0, H - overlayH, W, overlayH)
 
   ctx.textBaseline = 'top'
+  const PAD = 18
+  let y = H - overlayH + 14
 
   // Linha 1: Data/Hora
   ctx.fillStyle = '#ffffff'
-  ctx.font = 'bold 20px monospace'
-  ctx.fillText(`${dateStr}  ${timeStr}`, 14, H - overlayH + 10)
+  ctx.font = 'bold 22px monospace'
+  ctx.fillText(`${dateStr}  ${timeStr}`, PAD, y); y += 32
 
   // Linha 2: Nome + Tipo
-  ctx.font = 'bold 17px monospace'
+  ctx.font = 'bold 20px monospace'
   ctx.fillStyle = '#ffe066'
-  ctx.fillText(`${nomePessoa}  |  ${tipo}`, 14, H - overlayH + 36)
+  const nomeStr = `${nomePessoa}  |  ${tipo}`
+  const maxW = W - PAD * 2
+  let ns = nomeStr
+  while (ctx.measureText(ns).width > maxW && ns.length > 6) ns = ns.slice(0,-2) + '…'
+  ctx.fillText(ns, PAD, y); y += 30
 
   // Linha 3: Processo
-  ctx.font = '14px monospace'
+  ctx.font = '17px monospace'
   ctx.fillStyle = '#a0c4ff'
-  ctx.fillText(`Processo: ${processo}`, 14, H - overlayH + 60)
+  ctx.fillText(`Processo: ${processo}`, PAD, y); y += 26
 
-  // Linha 4: GPS
+  // Linha 4: GPS lat/lng/alt/precisão
   const latStr = gps.latitude != null ? `Lat: ${gps.latitude.toFixed(6)}` : 'Lat: —'
   const lngStr = gps.longitude != null ? `Lng: ${gps.longitude.toFixed(6)}` : 'Lng: —'
   const altStr = gps.altitude != null ? `Alt: ${gps.altitude.toFixed(1)}m` : ''
   const accStr = gps.precisaoGps != null ? `±${Math.round(gps.precisaoGps)}m` : ''
   ctx.fillStyle = '#88ff88'
-  ctx.font = '13px monospace'
-  ctx.fillText(`${latStr}  ${lngStr}  ${altStr}  ${accStr}`.trim(), 14, H - overlayH + 82)
+  ctx.font = '15px monospace'
+  ctx.fillText(`${latStr}  ${lngStr}`, PAD, y); y += 22
+  if (altStr || accStr) { ctx.fillText(`${altStr}  ${accStr}`.trim(), PAD, y); y += 22 }
 
-  // Linha 5: Endereço
+  // Linha 5: Endereço/CEP
   const endLine = [gps.endereco, gps.cep ? 'CEP ' + gps.cep : '', gps.cidade, gps.estado].filter(Boolean).join('  |  ')
   ctx.fillStyle = '#cccccc'
-  ctx.font = '12px monospace'
-  const maxWidth = W - 28
-  let endTrunc = endLine
-  while (ctx.measureText(endTrunc).width > maxWidth && endTrunc.length > 10) {
-    endTrunc = endTrunc.slice(0, -4) + '…'
-  }
-  ctx.fillText(endTrunc || 'GPS: ' + gps.statusGps, 14, H - overlayH + 102)
+  ctx.font = '14px monospace'
+  let endTrunc = endLine || ('GPS: ' + gps.statusGps)
+  while (ctx.measureText(endTrunc).width > maxW && endTrunc.length > 8) endTrunc = endTrunc.slice(0,-2) + '…'
+  ctx.fillText(endTrunc, PAD, y); y += 20
 
   // Linha 6: Status GPS
-  ctx.fillStyle = '#aaaaaa'
-  ctx.font = '11px monospace'
-  ctx.fillText(`GPS: ${gps.statusGps}`, 14, H - overlayH + 122)
+  ctx.fillStyle = '#999999'
+  ctx.font = '12px monospace'
+  ctx.fillText(`GPS: ${gps.statusGps}`, PAD, y)
 
-  // Marca d'água "LEXIS AI" no canto superior direito
+  // Marca d'água "LEXIS AI" no canto superior — tamanho portrait
   ctx.save()
-  ctx.globalAlpha = 0.35
+  ctx.globalAlpha = 0.30
   ctx.fillStyle = '#ffffff'
-  ctx.font = 'bold 15px monospace'
+  ctx.font = 'bold 17px monospace'
   ctx.textAlign = 'right'
-  ctx.fillText('LEXIS AI — INSTRUÇÃO CONCENTRADA', W - 14, 14)
+  ctx.fillText('LEXIS AI', W - PAD, PAD)
+  ctx.font = '13px monospace'
+  ctx.fillText('INSTRUÇÃO CONCENTRADA', W - PAD, PAD + 22)
   ctx.restore()
   ctx.textAlign = 'left'
 }
@@ -2203,9 +2214,10 @@ async function onVideoRecordingStop() {
   _videoStream?.getTracks().forEach(t => t.stop())
   _videoStream = null
 
-  // Cria URL local para preview imediato
+  // Cria entrada local imediata com status "analisando"
+  const localId = `rec_${Date.now()}`
   const localRec = {
-    id: `rec_${Date.now()}`,
+    id: localId,
     nomePessoa: meta.nomePessoa,
     tipoDepoimento: meta.tipoDepoimento,
     duracao,
@@ -2215,6 +2227,8 @@ async function onVideoRecordingStop() {
     videoUrl: URL.createObjectURL(blob),
     _blob: blob,
     _local: true,
+    _analisando: true,
+    analise: null,
   }
   state.recordings.unshift(localRec)
   renderRecordingsList(state.recordings)
@@ -2224,32 +2238,121 @@ async function onVideoRecordingStop() {
   // Volta UI ao formulário
   el('video-recorder-section').style.display = 'none'
   el('video-form-card').style.display = 'block'
-  el('rec-title') && (el('rec-title').textContent = 'Câmera Pronta')
 
-  // Upload ao Firebase
+  // ── Análise IA em paralelo ─────────────────────────────────────
+  analyzeVideoWithAI(blob, meta, localId, c)
+
+  // ── Upload ao Firebase em paralelo ────────────────────────────
   if (c && state.fbStorage) {
-    const progEl = el('ffmpeg-progress')
-    if (progEl) progEl.style.display = 'block'
-
     uploadVideoToFirebase(c.id, blob, meta, ({ stage, pct }) => {
       const fill = el('ffmpeg-progress')?.querySelector('.progress-fill')
       if (fill) fill.style.width = pct + '%'
       const lbl = el('ffmpeg-progress-label')
       if (lbl) lbl.textContent = `${stage} (${pct}%)`
     }).then(saved => {
-      if (progEl) progEl.style.display = 'none'
-      // Atualiza rec local com URL do Firebase
-      const idx = state.recordings.findIndex(r => r.id === localRec.id)
+      const lbl = el('ffmpeg-progress-label')
+      if (lbl) lbl.textContent = '✓ Salvo no Firebase!'
+      const idx = state.recordings.findIndex(r => r.id === localId)
       if (idx >= 0) {
         state.recordings[idx] = { ...state.recordings[idx], ...saved, _local: false }
         renderRecordingsList(state.recordings)
       }
+      // Salva análise no Firestore se já tiver sido concluída
+      setTimeout(() => {
+        const rec = state.recordings.find(r => r.id === localId)
+        if (rec?.analise && state.fbDb && saved.nomeArquivo) {
+          const docRef = collection(state.fbDb, 'processos', c.id, 'videos')
+          // Encontra o documento salvo e atualiza com a análise
+          getDocs(query(docRef, where('nomeArquivo', '==', saved.nomeArquivo))).then(snap => {
+            snap.forEach(d => updateDoc(d.ref, { analise: rec.analise }).catch(() => {}))
+          }).catch(() => {})
+        }
+      }, 5000)
     }).catch(err => {
       console.warn('[Upload vídeo]', err.message)
-      if (progEl) progEl.style.display = 'none'
       const lbl = el('ffmpeg-progress-label')
       if (lbl) { lbl.style.color = 'var(--risk-high)'; lbl.textContent = '✗ Erro no upload: ' + err.message }
     })
+  }
+}
+
+// ─── ANÁLISE IA DO VÍDEO ──────────────────────────────────────────
+
+async function analyzeVideoWithAI(blob, meta, localId, caseData) {
+  const key = getGroqKey()
+  if (!key) {
+    updateRecAnalise(localId, { erro: 'Chave Groq não configurada.' })
+    return
+  }
+
+  try {
+    // Extrai áudio do blob via FFmpeg para enviar ao Whisper
+    let audioBlob = blob
+    try { audioBlob = await extractAudioMp3(blob, () => {}) } catch {}
+
+    // Transcreve com Groq Whisper
+    const formData = new FormData()
+    const ext = audioBlob.type.includes('mp3') ? 'mp3' : 'webm'
+    formData.append('file', new File([audioBlob], `audio.${ext}`, { type: audioBlob.type || 'audio/webm' }))
+    formData.append('model', 'whisper-large-v3')
+    formData.append('language', 'pt')
+    formData.append('response_format', 'json')
+
+    const whisperRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },
+      body: formData,
+    })
+    if (!whisperRes.ok) throw new Error(`Whisper HTTP ${whisperRes.status}`)
+    const whisperData = await whisperRes.json()
+    const transcript = whisperData.text?.trim() || ''
+
+    if (!transcript) {
+      updateRecAnalise(localId, { transcricao: '', resumo: 'Nenhuma fala detectada no áudio.', erro: null })
+      return
+    }
+
+    // Análise jurídica completa com Groq Llama
+    const systemPrompt = `Você é um assistente jurídico especializado em direito previdenciário e trabalhista brasileiro. Analise depoimentos gravados em instrução concentrada de forma precisa e objetiva. Responda SOMENTE em JSON válido, sem markdown, sem texto fora do JSON.`
+
+    const caseCtx = caseData ? `Caso: ${caseData.title || ''}. Número: ${caseData.number || ''}. Área: ${caseData.category || ''}. Cliente: ${caseData.clientName || ''}.` : ''
+
+    const userPrompt = `Analise este depoimento de instrução concentrada e retorne SOMENTE este JSON:
+{
+  "transcricao": "${transcript.replace(/"/g, '\\"')}",
+  "resumo": "resumo objetivo do depoimento em 3-4 frases",
+  "pontosChave": ["ponto jurídico relevante 1", "ponto 2", "ponto 3"],
+  "contradicoes": ["contradição ou inconsistência encontrada (lista vazia se nenhuma)"],
+  "alertasJuridicos": ["alerta ou risco jurídico identificado"],
+  "sentimento": "cooperativo|evasivo|contraditório|nervoso|seguro|neutro",
+  "credibilidade": "alta|média|baixa",
+  "nivelRisco": "low|medium|high",
+  "recomendacoes": ["recomendação estratégica 1", "recomendação 2"],
+  "trechosCriticos": ["trecho textual importante do depoimento (máx 3)"]
+}
+
+Depoimento de: ${meta.nomePessoa} (${meta.tipoDepoimento})
+${caseCtx}
+Transcrição: ${transcript}`
+
+    const raw = await groqChat([{ role: 'user', content: userPrompt }], systemPrompt, { temperature: 0.3, max_tokens: 2000 })
+    let analise
+    try { analise = JSON.parse(raw.replace(/```json|```/g, '').trim()) }
+    catch { analise = { transcricao: transcript, resumo: raw, pontosChave: [], contradicoes: [], alertasJuridicos: [], sentimento: 'neutro', credibilidade: 'média', nivelRisco: 'medium', recomendacoes: [], trechosCriticos: [] } }
+
+    updateRecAnalise(localId, analise)
+
+  } catch (e) {
+    console.warn('[IA análise vídeo]', e.message)
+    updateRecAnalise(localId, { erro: e.message })
+  }
+}
+
+function updateRecAnalise(localId, analise) {
+  const idx = state.recordings.findIndex(r => r.id === localId)
+  if (idx >= 0) {
+    state.recordings[idx] = { ...state.recordings[idx], analise, _analisando: false }
+    renderRecordingsList(state.recordings)
   }
 }
 
@@ -2278,21 +2381,82 @@ function renderRecordingsList(recs) {
       : (v.date || '—')
     const local = v._local ? `<span class="badge badge-gold" style="font-size:10px">local</span>` : `<span class="badge badge-blue" style="font-size:10px">Firebase ✓</span>`
     const cidadeUF = [v.cidade, v.estado].filter(Boolean).join('/')
+
+    // Badge de status da análise IA
+    let aiStatus = ''
+    if (v._analisando) {
+      aiStatus = `<span class="badge badge-gold" style="font-size:10px">${spinner()} Analisando…</span>`
+    } else if (v.analise?.erro) {
+      aiStatus = `<span class="badge badge-risk-high" style="font-size:10px">⚠ Erro IA</span>`
+    } else if (v.analise) {
+      const riskColor = { low: 'badge-risk-low', medium: 'badge-risk-med', high: 'badge-risk-high' }[v.analise.nivelRisco] || 'badge-neutral'
+      aiStatus = `<span class="badge badge-teal" style="font-size:10px">✓ IA Analisado</span><span class="badge ${riskColor}" style="font-size:10px">Risco ${fmt.risk(v.analise.nivelRisco)}</span>`
+    }
+
+    // Preview da transcrição
+    const transcPreview = v.analise?.transcricao
+      ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px;padding:8px 10px;background:var(--bg-elevated);border-radius:var(--radius-sm);border:1px solid var(--border);max-height:60px;overflow:hidden;line-height:1.5">"${v.analise.transcricao.slice(0,160)}${v.analise.transcricao.length > 160 ? '…' : ''}"</div>`
+      : ''
+
     return `
-    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:14px" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''">
-      <div style="font-size:22px;margin-top:2px">🎥</div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:600;margin-bottom:2px">${v.nomePessoa || v.name || '—'}</div>
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">${v.tipoDepoimento || '—'} · ${data} · ${v.duracao || '—'}${cidadeUF ? ' · ' + cidadeUF : ''}</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${local}</div>
-      </div>
-      <div style="display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap">
-        ${(v.videoUrl || v.url) ? `<button class="btn btn-primary btn-sm" onclick="watchRecording('${v.id}')">▶ Assistir</button>` : ''}
-        ${(v.videoUrl || v.url) ? `<button class="btn btn-ghost btn-sm" onclick="downloadRec('${v.id}')">⬇ Baixar</button>` : ''}
-        <button class="btn btn-secondary btn-sm" onclick="generateRecReport('${v.id}')">📄 Relatório</button>
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border)" onmouseenter="this.style.background='var(--bg-hover)'" onmouseleave="this.style.background=''">
+      <div style="display:flex;align-items:flex-start;gap:14px">
+        <div style="font-size:22px;margin-top:2px">🎥</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;margin-bottom:2px">${v.nomePessoa || v.name || '—'}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">${v.tipoDepoimento || '—'} · ${data} · ${v.duracao || '—'}${cidadeUF ? ' · ' + cidadeUF : ''}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:4px">${local}${aiStatus}</div>
+          ${transcPreview}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+          ${(v.videoUrl || v.url) ? `<button class="btn btn-primary btn-sm" onclick="watchRecording('${v.id}')">▶ Assistir</button>` : ''}
+          ${(v.videoUrl || v.url) ? `<button class="btn btn-ghost btn-sm" onclick="downloadRec('${v.id}')">⬇ Baixar</button>` : ''}
+          <button class="btn btn-secondary btn-sm" onclick="generateRecReport('${v.id}')" ${v._analisando ? 'disabled' : ''}>📄 Relatório</button>
+          ${v.analise && !v.analise.erro ? `<button class="btn btn-ghost btn-sm" onclick="viewAiAnalysis('${v.id}')">🔍 Ver IA</button>` : ''}
+        </div>
       </div>
     </div>`
   }).join(''))
+}
+
+window.viewAiAnalysis = function(id) {
+  const rec = state.recordings.find(r => r.id === id)
+  if (!rec?.analise) return
+  const a = rec.analise
+  const riskLabel = { low: '🟢 Baixo', medium: '🟡 Médio', high: '🔴 Alto' }[a.nivelRisco] || a.nivelRisco
+  const credLabel = { alta: '✅ Alta', média: '⚠️ Média', baixa: '❌ Baixa' }[a.credibilidade] || a.credibilidade
+
+  // Abre painel de análise inline
+  const panelId = `ai-panel-${id}`
+  const existing = document.getElementById(panelId)
+  if (existing) { existing.remove(); return }
+
+  const container = document.createElement('div')
+  container.id = panelId
+  container.innerHTML = `
+    <div class="card fade-up" style="margin:16px 20px 8px;padding:20px;border:1px solid var(--accent-blue);background:var(--bg-elevated)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:600;color:var(--accent-blue)">🤖 Análise IA — ${rec.nomePessoa}</div>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('${panelId}').remove()">✕</button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+        <span class="badge badge-neutral">Sentimento: ${a.sentimento || '—'}</span>
+        <span class="badge badge-neutral">Credibilidade: ${credLabel}</span>
+        <span class="badge badge-neutral">Risco: ${riskLabel}</span>
+      </div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-secondary);margin-bottom:14px;padding:12px;background:var(--bg-base);border-radius:var(--radius-sm)">${a.resumo || '—'}</div>
+      ${a.pontosChave?.length ? `<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px">PONTOS-CHAVE</div>${a.pontosChave.map(p => `<div style="font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">• ${p}</div>`).join('')}</div>` : ''}
+      ${a.contradicoes?.length ? `<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:600;color:var(--risk-high);margin-bottom:6px">⚠ CONTRADIÇÕES</div>${a.contradicoes.map(c => `<div style="font-size:12px;padding:3px 0;color:var(--risk-high)">• ${c}</div>`).join('')}</div>` : ''}
+      ${a.alertasJuridicos?.length ? `<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:600;color:var(--risk-med);margin-bottom:6px">⚡ ALERTAS JURÍDICOS</div>${a.alertasJuridicos.map(al => `<div style="font-size:12px;padding:3px 0;color:var(--risk-med)">• ${al}</div>`).join('')}</div>` : ''}
+      ${a.recomendacoes?.length ? `<div style="margin-bottom:10px"><div style="font-size:11px;font-weight:600;color:var(--risk-low);margin-bottom:6px">✅ RECOMENDAÇÕES</div>${a.recomendacoes.map(r => `<div style="font-size:12px;padding:3px 0">• ${r}</div>`).join('')}</div>` : ''}
+      ${a.transcricao ? `<details style="margin-top:10px"><summary style="font-size:12px;font-weight:600;color:var(--text-muted);cursor:pointer">Ver transcrição completa</summary><div style="font-size:12px;line-height:1.8;color:var(--text-secondary);margin-top:8px;padding:10px;background:var(--bg-base);border-radius:var(--radius-sm);max-height:200px;overflow-y:auto">${a.transcricao}</div></details>` : ''}
+    </div>`
+
+  // Insere após o card do depoimento correspondente
+  const recCards = document.querySelectorAll('#recordings-list > div')
+  const recIdx = state.recordings.findIndex(r => r.id === id)
+  if (recCards[recIdx]) recCards[recIdx].after(container)
+  else el('recordings-list').appendChild(container)
 }
 
 window.watchRecording = function(id) {

@@ -2421,38 +2421,7 @@ async function onVideoRecordingStop() {
   // ── Análise IA em paralelo ─────────────────────────────────────
   analyzeVideoWithAI(blob, meta, localId, c)
 
-  // ── Upload ao Firebase em paralelo ────────────────────────────
-  if (c && state.fbStorage) {
-    uploadVideoToFirebase(c.id, blob, meta, ({ stage, pct }) => {
-      const fill = el('ffmpeg-progress')?.querySelector('.progress-fill')
-      if (fill) fill.style.width = pct + '%'
-      const lbl = el('ffmpeg-progress-label')
-      if (lbl) lbl.textContent = `${stage} (${pct}%)`
-    }).then(saved => {
-      const lbl = el('ffmpeg-progress-label')
-      if (lbl) lbl.textContent = '✓ Salvo no Firebase!'
-      const idx = state.recordings.findIndex(r => r.id === localId)
-      if (idx >= 0) {
-        state.recordings[idx] = { ...state.recordings[idx], ...saved, _local: false }
-        renderRecordingsList(state.recordings)
-      }
-      // Salva análise no Firestore se já tiver sido concluída
-      setTimeout(() => {
-        const rec = state.recordings.find(r => r.id === localId)
-        if (rec?.analise && state.fbDb && saved.nomeArquivo) {
-          const docRef = collection(state.fbDb, 'processos', c.id, 'videos')
-          // Encontra o documento salvo e atualiza com a análise
-          getDocs(query(docRef, where('nomeArquivo', '==', saved.nomeArquivo))).then(snap => {
-            snap.forEach(d => updateDoc(d.ref, { analise: rec.analise }).catch(() => {}))
-          }).catch(() => {})
-        }
-      }, 5000)
-    }).catch(err => {
-      console.warn('[Upload vídeo]', err.message)
-      const lbl = el('ffmpeg-progress-label')
-      if (lbl) { lbl.style.color = 'var(--risk-high)'; lbl.textContent = '✗ Erro no upload: ' + err.message }
-    })
-  }
+  // Upload agora é manual — botão aparece no card após análise IA
 }
 
 // ─── ANÁLISE IA DO VÍDEO ──────────────────────────────────────────
@@ -2532,6 +2501,74 @@ function updateRecAnalise(localId, analise) {
   if (idx >= 0) {
     state.recordings[idx] = { ...state.recordings[idx], analise, _analisando: false }
     renderRecordingsList(state.recordings)
+  }
+}
+
+// ─── SALVAR NO FIREBASE (manual, com relatório IA) ────────────────
+
+window.saveRecToFirebase = async function(localId) {
+  const rec = state.recordings.find(r => r.id === localId)
+  if (!rec?._blob) return
+
+  const c = state.selectedCase
+  if (!c) { alert('Selecione um caso antes de salvar.'); return }
+  if (!state.fbStorage) { alert('Firebase Storage não configurado.'); return }
+
+  // Desabilita botão e mostra progresso
+  const btn = el(`save-fb-btn-${localId}`)
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando…' }
+
+  // Mostra barra de progresso
+  const progressEl = el('ffmpeg-progress')
+  const progressFill = progressEl?.querySelector('.progress-fill')
+  const progressLabel = el('ffmpeg-progress-label')
+  if (progressEl) progressEl.style.display = 'block'
+
+  try {
+    const meta = {
+      nomePessoa: rec.nomePessoa || '—',
+      tipoDepoimento: rec.tipoDepoimento || '—',
+      numeroProcesso: rec.numeroProcesso || c.number || '',
+      advogado: rec.advogado || state.currentUser?.name || '',
+      dataInicio: rec.dataInicio || rec.criadoEm || new Date().toISOString(),
+      dataFim: rec.dataFim || rec.criadoEm || new Date().toISOString(),
+      duracao: rec.duracao || '—',
+      latitude: rec.latitude ?? null,
+      longitude: rec.longitude ?? null,
+      altitude: rec.altitude ?? null,
+      precisaoGps: rec.precisaoGps ?? null,
+      cep: rec.cep || '', bairro: rec.bairro || '',
+      cidade: rec.cidade || '', estado: rec.estado || '',
+      endereco: rec.endereco || '', statusGps: rec.statusGps || 'indisponível',
+    }
+
+    const saved = await uploadVideoToFirebase(c.id, rec._blob, meta, ({ stage, pct }) => {
+      if (progressFill) progressFill.style.width = pct + '%'
+      if (progressLabel) progressLabel.textContent = `${stage} (${pct}%)`
+    })
+
+    // Salva o relatório IA junto no Firestore
+    if (rec.analise && state.fbDb && saved.nomeArquivo) {
+      const docRef = collection(state.fbDb, 'processos', c.id, 'videos')
+      const snap = await getDocs(query(docRef, where('nomeArquivo', '==', saved.nomeArquivo)))
+      snap.forEach(d => updateDoc(d.ref, { analise: rec.analise }).catch(() => {}))
+    }
+
+    if (progressLabel) progressLabel.textContent = '✓ Salvo no banco de dados com relatório IA!'
+
+    // Atualiza o registro local para refletir que foi salvo
+    const idx = state.recordings.findIndex(r => r.id === localId)
+    if (idx >= 0) {
+      state.recordings[idx] = { ...state.recordings[idx], ...saved, _local: false, _blob: null }
+      renderRecordingsList(state.recordings)
+    }
+
+    setTimeout(() => { if (progressEl) progressEl.style.display = 'none' }, 3000)
+
+  } catch (err) {
+    console.warn('[Salvar Firebase]', err.message)
+    if (progressLabel) { progressLabel.style.color = 'var(--risk-high)'; progressLabel.textContent = '✗ Erro: ' + err.message }
+    if (btn) { btn.disabled = false; btn.textContent = 'Salvar Firebase' }
   }
 }
 
@@ -2648,6 +2685,10 @@ function renderRecordingsList(recs) {
           ${(v.videoUrl || v.url) ? `<button class="btn btn-ghost btn-sm" onclick="downloadRec('${v.id}')">⬇ Baixar</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="generateRecReport('${v.id}')" ${v._analisando ? 'disabled' : ''}>📄 Relatório</button>
           ${v.analise && !v.analise.erro ? `<button class="btn btn-ghost btn-sm" onclick="viewAiAnalysis('${v.id}')">🔍 Ver IA</button>` : ''}
+          ${v._local && !v._analisando && v._blob ? `<button class="btn btn-primary btn-sm" id="save-fb-btn-${v.id}" onclick="saveRecToFirebase('${v.id}')" style="background:var(--accent-teal);border-color:var(--accent-teal)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" stroke="currentColor" stroke-width="1.5"/><polyline points="17 21 17 13 7 13 7 21" stroke="currentColor" stroke-width="1.5"/><polyline points="7 3 7 8 15 8" stroke="currentColor" stroke-width="1.5"/></svg>
+            Salvar Video
+          </button>` : ''}
         </div>
       </div>
     </div>`
